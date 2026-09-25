@@ -286,6 +286,24 @@ public partial class MainWindow : Window
         Status("SCL copied to clipboard. Paste it into TIA Portal and try to compile it.");
     }
 
+    /// <summary>
+    /// Empties the result tabs only. The scenario and the term table are left alone -
+    /// clearing those would throw away work, which is not what this button promises.
+    /// </summary>
+    private void ClearResult_Click(object sender, RoutedEventArgs e)
+    {
+        SclBox.Text = "";
+        ExplanationBox.Text = "";
+        ContextBox.Text = "";
+        RawBox.Text = "";
+        UnknownBox.Text = "-";
+        WarningsBox.Text = "-";
+
+        _lastOutcome = null;
+        ResultStatus.Text = "Cleared";
+        Status("Result cleared. Scenario and terms are unchanged.");
+    }
+
     private void SaveRun_Click(object sender, RoutedEventArgs e)
     {
         if (_lastOutcome is null) { Status("Run a translation first."); return; }

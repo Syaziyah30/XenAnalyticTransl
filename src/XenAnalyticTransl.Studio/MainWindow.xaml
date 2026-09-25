@@ -225,6 +225,8 @@
                             <Button Content="Copy SCL" Click="CopyScl_Click"/>
                             <Button Content="Save Run..." Click="SaveRun_Click"
                                     ToolTip="Save scenario, prompt and result as a JSON file for the evaluation set"/>
+                            <Button Content="Clear Result" Click="ClearResult_Click"
+                                    ToolTip="Empty every result tab. Does not touch the scenario or the terms."/>
                         </StackPanel>
                     </Grid>
                 </Border>
