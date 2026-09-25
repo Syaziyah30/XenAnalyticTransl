@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/XenAnalyticTransl.AI/XenAnalyticTransl.AI.csproj" />
+    <Project Path="src/XenAnalyticTransl.Cli/XenAnalyticTransl.Cli.csproj" />
+    <Project Path="src/XenAnalyticTransl.Studio/XenAnalyticTransl.Studio.csproj" />
+  </Folder>
+</Solution>
