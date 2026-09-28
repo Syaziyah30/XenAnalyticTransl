@@ -45,7 +45,12 @@ public sealed class LlmSettings
     /// Must also leave room for reasoning models, which spend this budget thinking
     /// before they write anything - too low and the reply is cut off at zero characters.
     /// </summary>
-    public int MaxTokens { get; set; } = 16000;
+    /// Sized to the job: one scenario's SCL plus explanation runs 700-2,100 tokens with
+    /// thinking off, so 6,000 is ample headroom. Keep it tight - providers reserve
+    /// max_tokens x the output rate against your balance before running anything, so an
+    /// over-generous ceiling fails with 402 on a small balance for no benefit.
+    /// Models that must think need far more (see the Qwen Max preset).
+    public int MaxTokens { get; set; } = 6000;
 
     /// <summary>
     /// Asks the router to turn the model's reasoning off (OpenRouter's `reasoning` field).
@@ -107,14 +112,17 @@ public static class ProviderPresets
         // Gemini through the same OpenRouter key. Gemini accepts temperature, so that
         // stays on; reasoning is disabled by default like Qwen Flash. If it returns a 400
         // naming the reasoning field, set DisableReasoning = false here.
-        new() { ProviderName = "OpenRouter - Gemini 3.8 Flash (coding)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "google/gemini-3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0.75m, OutputUsdPerM = 3.75m },
-
-        new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite (cheapest)",
+        // Reasoning is mandatory on this endpoint - it 400s if you try to disable it,
+        // like Qwen Max. So leave it on and give the budget room for thinking + answer.
+        new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite",
                 BaseUrl = "https://openrouter.ai/api/v1",
                 Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.30m, OutputUsdPerM = 2.50m,
+                DisableReasoning = false, MaxTokens = 10000 },
+
+        new() { ProviderName = "OpenRouter - Gemini 3.1 Flash Lite (cheapest)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
                 InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
 
         // Claude direct, via Anthropic's OpenAI-compatibility layer.
