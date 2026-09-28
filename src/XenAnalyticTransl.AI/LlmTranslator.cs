@@ -67,6 +67,11 @@ public sealed class LlmSettings
     /// </summary>
     public Dictionary<string, object>? ExtraBody { get; set; }
 
+    /// <summary>Published USD price per 1M tokens, for the local spend estimate.
+    /// Only some providers report a balance; for the rest we work it out from usage.</summary>
+    public decimal InputUsdPerM { get; set; }
+    public decimal OutputUsdPerM { get; set; }
+
     /// <summary>Reads the key from the environment at call time. Returns null when unset.</summary>
     public string? ResolveApiKey() =>
         string.IsNullOrWhiteSpace(ApiKeyEnvVar) ? null
@@ -80,13 +85,15 @@ public static class ProviderPresets
     {
         new() { ProviderName = "OpenRouter - Qwen3.8 Flash (cheap, reliable)",
                 BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY" },
+                Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.15m, OutputUsdPerM = 0.47m },
 
         // Free tier runs on a shared pool and returns 429 whenever it is busy.
         // Fine when it works; not something to depend on for a test session.
         new() { ProviderName = "OpenRouter - Qwen3.8 27B (free, often rate-limited)",
                 BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY" },
+                Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m },
 
         // Max refuses `reasoning: {enabled:false}` with a 400 - reasoning is mandatory on
         // that endpoint. So leave it on and give the budget room for thinking AND answer.
@@ -94,7 +101,21 @@ public static class ProviderPresets
         new() { ProviderName = "OpenRouter - Qwen3.8 Max (coding, slower, pricier)",
                 BaseUrl = "https://openrouter.ai/api/v1",
                 Model = "qwen/qwen3.8-max-0902", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 2m, OutputUsdPerM = 6m,
                 DisableReasoning = false, MaxTokens = 32000 },
+
+        // Gemini through the same OpenRouter key. Gemini accepts temperature, so that
+        // stays on; reasoning is disabled by default like Qwen Flash. If it returns a 400
+        // naming the reasoning field, set DisableReasoning = false here.
+        new() { ProviderName = "OpenRouter - Gemini 3.8 Flash (coding)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "google/gemini-3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.75m, OutputUsdPerM = 3.75m },
+
+        new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite (cheapest)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
 
         // Claude direct, via Anthropic's OpenAI-compatibility layer.
         // Anthropic documents this as a testing/comparison path, not production - fine for
@@ -102,12 +123,14 @@ public static class ProviderPresets
         new() { ProviderName = "Claude - Anthropic direct (Opus 5)",
                 BaseUrl = "https://api.anthropic.com/v1",
                 Model = "claude-opus-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY",
+                InputUsdPerM = 5m, OutputUsdPerM = 25m,
                 SendTemperature = false, DisableReasoning = false,
                 ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
         new() { ProviderName = "Claude - Anthropic direct (Sonnet 5, cheaper)",
                 BaseUrl = "https://api.anthropic.com/v1",
                 Model = "claude-sonnet-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY",
+                InputUsdPerM = 2m, OutputUsdPerM = 10m,
                 SendTemperature = false, DisableReasoning = false,
                 ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
@@ -115,15 +138,9 @@ public static class ProviderPresets
         new() { ProviderName = "OpenRouter - Claude Sonnet 5 (needs credit)",
                 BaseUrl = "https://openrouter.ai/api/v1",
                 Model = "anthropic/claude-sonnet-5", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 2m, OutputUsdPerM = 10m,
                 SendTemperature = false },
 
-        new() { ProviderName = "Qwen - Alibaba Model Studio (Singapore)",
-                BaseUrl = "https://WORKSPACE_ID.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-                Model = "qwen3.7-plus", ApiKeyEnvVar = "DASHSCOPE_API_KEY" },
-
-        new() { ProviderName = "Qwen - Alibaba Model Studio (Virginia)",
-                BaseUrl = "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
-                Model = "qwen3.7-plus", ApiKeyEnvVar = "DASHSCOPE_API_KEY" },
     };
 }
 
@@ -333,6 +350,8 @@ public sealed class LlmTranslator : IDisposable
 
     public void Dispose() => _http.Dispose();
 }
+
+
 
 
 

@@ -33,6 +33,10 @@ public partial class MainWindow : Window
     };
     private readonly System.Diagnostics.Stopwatch _runClock = new();
 
+    // Local spend tally, for providers that publish no balance endpoint.
+    private int _sessionRuns;
+    private decimal _sessionUsd;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -78,10 +82,20 @@ public partial class MainWindow : Window
         if (UsagePct is null) return;
 
         var settings = CurrentSettings();
+
+        // Anthropic and most direct providers publish no balance endpoint - their usage
+        // sits behind a separate admin credential. Show what this session has spent instead,
+        // worked out from token counts and the published rates.
         if (!AccountInfo.Supports(settings))
         {
             UsageBar.Value = FreeBar.Value = 0;
-            UsagePct.Text = FreePct.Text = "n/a";
+            UsagePct.Text = _sessionRuns == 0
+                ? "no runs yet"
+                : $"~${_sessionUsd:0.000} this session";
+            FreePct.Text = _sessionRuns == 0
+                ? "provider reports no balance"
+                : $"{_sessionRuns} run{(_sessionRuns == 1 ? "" : "s")}";
+            UsagePct.Foreground = FreePct.Foreground = System.Windows.Media.Brushes.Black;
             return;
         }
 
@@ -129,7 +143,9 @@ public partial class MainWindow : Window
             DisableReasoning = preset.DisableReasoning,
             MaxTokens = preset.MaxTokens,
             SendTemperature = preset.SendTemperature,
-            ExtraBody = preset.ExtraBody
+            ExtraBody = preset.ExtraBody,
+            InputUsdPerM = preset.InputUsdPerM,
+            OutputUsdPerM = preset.OutputUsdPerM
         };
     }
 
@@ -278,9 +294,17 @@ public partial class MainWindow : Window
         MetricsPanel.Visibility = Visibility.Visible;
         TimeText.Text = $"{o.ElapsedMs / 1000.0:0.0} s";
 
+        if (o.Ok)
+        {
+            var s = CurrentSettings();
+            _sessionRuns++;
+            _sessionUsd += o.EstimateCostUsd(s.InputUsdPerM, s.OutputUsdPerM);
+        }
+
         var model = o.Model.Contains('/') ? o.Model[(o.Model.IndexOf('/') + 1)..] : o.Model;
-        var tokens = o.PromptTokens + o.CompletionTokens > 0
-            ? $"  |  {o.PromptTokens} in / {o.CompletionTokens} out"
+        var total = o.PromptTokens + o.CompletionTokens;
+        var tokens = total > 0
+            ? $"  |  {o.PromptTokens:N0} in / {o.CompletionTokens:N0} out  |  total {total:N0} tokens"
             : "";
         MetricsText.Text = $"{model}{tokens}";
 
@@ -324,7 +348,8 @@ public partial class MainWindow : Window
         ResultStatus.Text = verdict;
 
         Status($"{verdict}  |  {o.Model}  |  {o.ElapsedMs} ms  |  " +
-               $"{o.PromptTokens} in / {o.CompletionTokens} out tokens  |  " +
+               $"{o.PromptTokens:N0} in / {o.CompletionTokens:N0} out  |  " +
+               $"total {o.PromptTokens + o.CompletionTokens:N0} tokens  |  " +
                $"{o.UnknownIdentifiers.Count} unknown, {r.Warnings.Count} warnings");
     }
 
@@ -465,5 +490,6 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 }
+
 
 

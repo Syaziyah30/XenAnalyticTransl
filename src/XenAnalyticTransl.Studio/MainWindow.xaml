@@ -110,7 +110,7 @@
                 </Grid.RowDefinitions>
 
                 <!-- paid credit against the key limit -->
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="Paid credit"
+                <TextBlock Grid.Row="0" Grid.Column="0" x:Name="UsageLabel" Text="Paid credit"
                            VerticalAlignment="Center" Margin="0,1,10,1"
                            FontSize="12" Foreground="#333"/>
                 <ProgressBar Grid.Row="0" Grid.Column="1" x:Name="UsageBar"
@@ -123,7 +123,7 @@
                            FontSize="12" Foreground="#333" HorizontalAlignment="Right"/>
 
                 <!-- today's free-model requests -->
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="Free models today"
+                <TextBlock Grid.Row="1" Grid.Column="0" x:Name="FreeLabel" Text="Free models today"
                            VerticalAlignment="Center" Margin="0,1,10,1"
                            FontSize="12" Foreground="#333"/>
                 <ProgressBar Grid.Row="1" Grid.Column="1" x:Name="FreeBar"
@@ -290,4 +290,5 @@
         </Border>
     </Grid>
 </Window>
+
 
