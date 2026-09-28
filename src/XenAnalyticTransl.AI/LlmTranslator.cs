@@ -57,6 +57,16 @@ public sealed class LlmSettings
     /// </summary>
     public bool DisableReasoning { get; set; } = true;
 
+    /// <summary>
+    /// Extra fields merged into the request body, for provider-specific parameters.
+    ///
+    /// Claude 5 models think by default, which on this task triples the output tokens
+    /// and the wall time for no measurable gain - translation from a structured context
+    /// pack is not a reasoning problem. Pass {"thinking": {type = "disabled"}} to turn
+    /// it off. Unknown fields are ignored by most endpoints, so this is safe per preset.
+    /// </summary>
+    public Dictionary<string, object>? ExtraBody { get; set; }
+
     /// <summary>Reads the key from the environment at call time. Returns null when unset.</summary>
     public string? ResolveApiKey() =>
         string.IsNullOrWhiteSpace(ApiKeyEnvVar) ? null
@@ -92,12 +102,14 @@ public static class ProviderPresets
         new() { ProviderName = "Claude - Anthropic direct (Opus 5)",
                 BaseUrl = "https://api.anthropic.com/v1",
                 Model = "claude-opus-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY",
-                SendTemperature = false, DisableReasoning = false },
+                SendTemperature = false, DisableReasoning = false,
+                ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
         new() { ProviderName = "Claude - Anthropic direct (Sonnet 5, cheaper)",
                 BaseUrl = "https://api.anthropic.com/v1",
                 Model = "claude-sonnet-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY",
-                SendTemperature = false, DisableReasoning = false },
+                SendTemperature = false, DisableReasoning = false,
+                ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
         // Claude through the SAME OpenRouter key - no Anthropic account needed.
         new() { ProviderName = "OpenRouter - Claude Sonnet 5 (needs credit)",
@@ -160,6 +172,17 @@ public sealed class LlmTranslator : IDisposable
         if (settings.DisableReasoning)
             body["reasoning"] = new { enabled = false };
 
+        if (settings.ExtraBody is not null)
+            foreach (var kv in settings.ExtraBody) body[kv.Key] = kv.Value;
+
+        // Kept so the app can show exactly what was sent. Safe to display: the API key
+        // travels in the Authorization header, never in the body.
+        var requestJson = JsonSerializer.Serialize(body, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        });
+
         // Shared provider pools return 429 intermittently, so a transient blip should
         // not surface as a failure. Two retries with backoff, then give up.
         const int maxAttempts = 3;
@@ -201,15 +224,15 @@ public sealed class LlmTranslator : IDisposable
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return Fail(settings, sw, $"Timed out after {settings.TimeoutSeconds}s.");
+                return Fail(settings, sw, $"Timed out after {settings.TimeoutSeconds}s.", null, requestJson);
             }
             catch (OperationCanceledException)
             {
-                return Fail(settings, sw, "Cancelled.");
+                return Fail(settings, sw, "Cancelled.", null, requestJson);
             }
             catch (Exception ex)
             {
-                return Fail(settings, sw, $"{ex.GetType().Name}: {ex.Message}");
+                return Fail(settings, sw, $"{ex.GetType().Name}: {ex.Message}", null, requestJson);
             }
         }
 
@@ -231,7 +254,7 @@ public sealed class LlmTranslator : IDisposable
         }
         catch (Exception ex)
         {
-            return Fail(settings, sw, $"Could not read the response envelope: {ex.Message}", raw);
+            return Fail(settings, sw, $"Could not read the response envelope: {ex.Message}", raw, requestJson);
         }
 
         // A reasoning model that runs out of budget mid-thought returns HTTP 200 with an
@@ -250,7 +273,7 @@ public sealed class LlmTranslator : IDisposable
             var advice = finish == "length"
                 ? $" It used the whole {settings.MaxTokens}-token budget thinking and never wrote an answer. Raise MaxTokens, or keep DisableReasoning on."
                 : "";
-            return Fail(settings, sw, $"Model returned empty content (finish_reason: {finish}).{advice}", raw);
+            return Fail(settings, sw, $"Model returned empty content (finish_reason: {finish}).{advice}", raw, requestJson);
         }
 
         // ---- parse the model's JSON answer ----
@@ -261,11 +284,11 @@ public sealed class LlmTranslator : IDisposable
         }
         catch (Exception ex)
         {
-            return Fail(settings, sw, $"Model did not return valid JSON: {ex.Message}", content);
+            return Fail(settings, sw, $"Model did not return valid JSON: {ex.Message}", content, requestJson);
         }
 
         if (result is null)
-            return Fail(settings, sw, "Model returned an empty result.", content);
+            return Fail(settings, sw, "Model returned an empty result.", content, requestJson);
 
         var unknown = TagValidator.FindUnknown(result, pack).ToList();
 
@@ -279,7 +302,8 @@ public sealed class LlmTranslator : IDisposable
             ElapsedMs = sw.ElapsedMilliseconds,
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
-            RawResponse = content
+            RawResponse = content,
+            RequestBody = requestJson
         };
     }
 
@@ -293,7 +317,7 @@ public sealed class LlmTranslator : IDisposable
 
     private static string Trim(string s, int n) => s.Length <= n ? s : s[..n] + "...";
 
-    private static TranslationOutcome Fail(LlmSettings s, Stopwatch sw, string error, string? raw = null)
+    private static TranslationOutcome Fail(LlmSettings s, Stopwatch sw, string error, string? raw = null, string? request = null)
     {
         sw.Stop();
         return new TranslationOutcome
@@ -302,10 +326,13 @@ public sealed class LlmTranslator : IDisposable
             Model = s.Model,
             ElapsedMs = sw.ElapsedMilliseconds,
             Error = error,
-            RawResponse = raw
+            RawResponse = raw,
+            RequestBody = request
         };
     }
 
     public void Dispose() => _http.Dispose();
 }
+
+
 

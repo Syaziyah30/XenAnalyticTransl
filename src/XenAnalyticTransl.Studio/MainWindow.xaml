@@ -222,6 +222,18 @@
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <TextBlock x:Name="ResultStatus" Text="Not run yet" VerticalAlignment="Center"
                                        Margin="0,0,14,0" FontSize="12" Foreground="#666"/>
+
+                            <!-- run metrics: the numbers you compare models on -->
+                            <Border x:Name="MetricsPanel" Background="#E8EEF7" BorderBrush="#B9CCE8"
+                                    BorderThickness="1" CornerRadius="4" Padding="10,3" Margin="0,0,12,0"
+                                    VerticalAlignment="Center" Visibility="Collapsed">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="TimeText" Text="-" FontSize="15" FontWeight="Bold"
+                                               Foreground="#12447F" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="MetricsText" Text="" FontSize="12" Foreground="#3B4A63"
+                                               Margin="10,0,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
                             <Button Content="Copy SCL" Click="CopyScl_Click"/>
                             <Button Content="Save Run..." Click="SaveRun_Click"
                                     ToolTip="Save scenario, prompt and result as a JSON file for the evaluation set"/>
@@ -255,6 +267,11 @@
                     <TabItem Header="Context Pack">
                         <TextBox x:Name="ContextBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8"/>
+                    </TabItem>
+                    <TabItem Header="Request Sent">
+                        <TextBox x:Name="RequestBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto" Padding="8" Background="#FBFCFE"/>
                     </TabItem>
                     <TabItem Header="Raw Response">
                         <TextBox x:Name="RawBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
@@ -26,6 +26,13 @@ public partial class MainWindow : Window
     private TranslationOutcome? _lastOutcome;
     private bool _suppressTextSync;
 
+    // Live elapsed clock while a request is in flight.
+    private readonly System.Windows.Threading.DispatcherTimer _tick = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(100)
+    };
+    private readonly System.Diagnostics.Stopwatch _runClock = new();
+
     public MainWindow()
     {
         InitializeComponent();
@@ -36,10 +43,30 @@ public partial class MainWindow : Window
         foreach (var p in ProviderPresets.All) ProviderBox.Items.Add(p.ProviderName);
         ProviderBox.SelectedIndex = 0;
 
+        _tick.Tick += (_, _) => TimeText.Text = $"{_runClock.Elapsed.TotalSeconds:0.0} s";
+
         BuildReferenceTree();
         LoadSample();
         RefreshKeyStatus();
         _ = RefreshUsageAsync();
+    }
+
+    /// <summary>Starts the on-screen clock so a long call never looks like a hang.</summary>
+    private void StartRunClock()
+    {
+        _runClock.Restart();
+        MetricsPanel.Visibility = Visibility.Visible;
+        TimeText.Text = "0.0 s";
+        TimeText.Foreground = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0x12, 0x44, 0x7F));
+        MetricsText.Text = $"{ModelBox.Text.Trim()}  |  running...";
+        _tick.Start();
+    }
+
+    private void StopRunClock()
+    {
+        _tick.Stop();
+        _runClock.Stop();
     }
 
     // ---------------------------------------------------------------- credit
@@ -101,7 +128,8 @@ public partial class MainWindow : Window
             // tries to switch it off, others waste the whole budget thinking.
             DisableReasoning = preset.DisableReasoning,
             MaxTokens = preset.MaxTokens,
-            SendTemperature = preset.SendTemperature
+            SendTemperature = preset.SendTemperature,
+            ExtraBody = preset.ExtraBody
         };
     }
 
@@ -198,6 +226,7 @@ public partial class MainWindow : Window
 
         SetBusy(true);
         ResultStatus.Text = "Generating...";
+        StartRunClock();
         Status($"Calling {ModelBox.Text}...");
 
         _cts = new CancellationTokenSource();
@@ -214,6 +243,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            StopRunClock();
             _cts?.Dispose();
             _cts = null;
             SetBusy(false);
@@ -242,9 +272,30 @@ public partial class MainWindow : Window
         Conventions = "Siemens TIA Portal SCL. Comment each block with the sentence it implements."
     };
 
+    /// <summary>Shows the numbers a model is judged on, where they cannot scroll off screen.</summary>
+    private void ShowMetrics(TranslationOutcome o)
+    {
+        MetricsPanel.Visibility = Visibility.Visible;
+        TimeText.Text = $"{o.ElapsedMs / 1000.0:0.0} s";
+
+        var model = o.Model.Contains('/') ? o.Model[(o.Model.IndexOf('/') + 1)..] : o.Model;
+        var tokens = o.PromptTokens + o.CompletionTokens > 0
+            ? $"  |  {o.PromptTokens} in / {o.CompletionTokens} out"
+            : "";
+        MetricsText.Text = $"{model}{tokens}";
+
+        // Slow runs are worth noticing when comparing models.
+        TimeText.Foreground = o.ElapsedMs > 30000
+            ? System.Windows.Media.Brushes.Firebrick
+            : new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x12, 0x44, 0x7F));
+    }
+
     private void Render(TranslationOutcome o)
     {
         RawBox.Text = o.RawResponse ?? "";
+        RequestBox.Text = o.RequestBody ?? "";
+        ShowMetrics(o);
 
         if (!o.Ok)
         {
@@ -296,11 +347,13 @@ public partial class MainWindow : Window
         ExplanationBox.Text = "";
         ContextBox.Text = "";
         RawBox.Text = "";
+        RequestBox.Text = "";
         UnknownBox.Text = "-";
         WarningsBox.Text = "-";
 
         _lastOutcome = null;
         ResultStatus.Text = "Cleared";
+        MetricsPanel.Visibility = Visibility.Collapsed;
         Status("Result cleared. Scenario and terms are unchanged.");
     }
 
@@ -412,3 +465,5 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 }
+
+

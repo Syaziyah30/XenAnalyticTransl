@@ -1,4 +1,4 @@
-using XenAnalyticTransl.AI;
+﻿using XenAnalyticTransl.AI;
 
 // Headless harness: runs the same code path as the Studio, with no UI.
 // Use it to debug failures and, later, to batch-run the evaluation set.
@@ -23,7 +23,8 @@ var settings = new LlmSettings
     RequestJsonMode = false,
     DisableReasoning = preset?.DisableReasoning ?? true,
     MaxTokens = preset?.MaxTokens ?? 16000,
-    SendTemperature = preset?.SendTemperature ?? true
+    SendTemperature = preset?.SendTemperature ?? true,
+    ExtraBody = preset?.ExtraBody
 };
 
 var key = settings.ResolveApiKey();
@@ -94,3 +95,4 @@ Console.WriteLine();
 Console.WriteLine("=== MODEL WARNINGS ===");
 Console.WriteLine(r.Warnings.Count == 0 ? "none" : string.Join("\n", r.Warnings.Select(w => "- " + w)));
 return 0;
+

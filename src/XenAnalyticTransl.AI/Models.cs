@@ -54,6 +54,8 @@ public sealed class TranslationOutcome
     public int PromptTokens { get; init; }
     public int CompletionTokens { get; init; }
     public string? RawResponse { get; init; }
+    /// <summary>The exact JSON posted to the provider. Holds no key - that rides in a header.</summary>
+    public string? RequestBody { get; init; }
     public string? Error { get; init; }
 
     public bool Ok => Error is null && Result is not null;
