@@ -1,6 +1,7 @@
 ﻿<Window x:Class="XenAnalyticTransl.Studio.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:XenAnalyticTransl.Studio"
         Title="PLC Logic Builder - R&amp;D Studio"
         Height="820" Width="1280" MinHeight="560" MinWidth="880"
         WindowState="Maximized"
@@ -189,25 +190,78 @@
             <Border Grid.Column="4" Style="{StaticResource Card}">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
-                        <TextBlock Text="Properties  -  term to PLC variable" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock Text="Properties" Style="{StaticResource PanelTitle}"/>
                     </Border>
+
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6">
-                        <Button Content="Add Term" Click="AddTerm_Click"/>
-                        <Button Content="Delete Term" Click="DeleteTerm_Click"/>
+                        <Button Content="Add Prop." Click="AddProperty_Click"/>
+                        <Button Content="Add State" Click="AddState_Click"/>
+                        <Button Content="Delete" Click="DeleteNode_Click"/>
                     </StackPanel>
-                    <TextBlock DockPanel.Dock="Bottom" Margin="8,2,8,8" TextWrapping="Wrap"
+
+                    <!-- Local / Shared, as in the production app -->
+                    <TabControl DockPanel.Dock="Top" Margin="6,0,6,4" Height="26" BorderThickness="0">
+                        <TabItem Header="Local"/>
+                        <TabItem Header="Shared" IsEnabled="False"/>
+                    </TabControl>
+
+                    <!-- Association: the PLC variable behind the selected node -->
+                    <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Line}"
+                            BorderThickness="0,1,0,0" Padding="10,8" Background="#FAFBFD">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Association"
+                                       FontWeight="SemiBold" Foreground="{StaticResource Navy}"
+                                       Margin="0,0,0,6"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Source :" VerticalAlignment="Center"
+                                       Margin="0,0,8,4" FontSize="12"/>
+                            <ComboBox  Grid.Row="1" Grid.Column="1" x:Name="SourceBox" Margin="0,0,0,4"
+                                       SelectedIndex="0" FontSize="12">
+                                <ComboBoxItem Content="HMI"/>
+                                <ComboBoxItem Content="PLC"/>
+                                <ComboBoxItem Content="Field"/>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="PLC Variable :" VerticalAlignment="Center"
+                                       Margin="0,0,8,4" FontSize="12"/>
+                            <TextBox   Grid.Row="2" Grid.Column="1" x:Name="AssocVariable" Margin="0,0,0,4"
+                                       Padding="4,3" FontSize="12" TextChanged="Assoc_Changed"/>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Data Type :" VerticalAlignment="Center"
+                                       Margin="0,0,8,0" FontSize="12"/>
+                            <TextBox   Grid.Row="3" Grid.Column="1" x:Name="AssocType"
+                                       Padding="4,3" FontSize="12" TextChanged="Assoc_Changed"/>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock DockPanel.Dock="Bottom" Margin="8,4,8,6" TextWrapping="Wrap"
                                Foreground="#666" FontSize="11"
-                               Text="Only these variables may appear in generated code. Anything else is flagged as unknown."/>
-                    <DataGrid x:Name="TermGrid" AutoGenerateColumns="False" Margin="6,0,6,4"
-                              CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                              RowHeaderWidth="0" FontSize="12">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Term"  Binding="{Binding Name}"     Width="1.3*"/>
-                            <DataGridTextColumn Header="PLC Variable" Binding="{Binding Variable}" Width="1.2*"/>
-                            <DataGridTextColumn Header="Type"  Binding="{Binding Type}"     Width="0.6*"/>
-                            <DataGridTextColumn Header="Value" Binding="{Binding Value}"    Width="0.5*"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
+                               Text="Only variables declared here may appear in generated code. Anything else is flagged as unknown."/>
+
+                    <TreeView x:Name="PropertyTree" BorderThickness="0" Margin="6,0,6,4" FontSize="13"
+                              SelectedItemChanged="PropertyTree_SelectedItemChanged">
+                        <TreeView.Resources>
+                            <HierarchicalDataTemplate DataType="{x:Type local:PropertyNode}"
+                                                      ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Name}" FontWeight="{Binding Weight}"/>
+                                    <TextBlock Text="{Binding VariableHint}" Foreground="#8892A6"
+                                               FontSize="11" Margin="10,1,0,0"/>
+                                </StackPanel>
+                            </HierarchicalDataTemplate>
+                        </TreeView.Resources>
+                    </TreeView>
                 </DockPanel>
             </Border>
         </Grid>

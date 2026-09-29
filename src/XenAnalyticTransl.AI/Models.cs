@@ -31,6 +31,15 @@ public sealed class ContextPack
     [JsonPropertyName("target_language")] public string TargetLanguage { get; set; } = "SCL";
     [JsonPropertyName("scenario")] public string Scenario { get; set; } = "";
     [JsonPropertyName("terms")] public List<Term> Terms { get; set; } = new();
+    /// <summary>
+    /// The other scenarios in the profile, so the model can resolve and flatten
+    /// references. "When auto run ready or manual run ready and no faults" names three
+    /// other scenarios - without their text the model cannot flatten them, and the
+    /// referencing rules in the system prompt have nothing to act on.
+    /// </summary>
+    [JsonPropertyName("referenced_scenarios")]
+    public List<ScenarioRef> ReferencedScenarios { get; set; } = new();
+
     [JsonPropertyName("timers")] public List<string> Timers { get; set; } = new();
     [JsonPropertyName("functions")] public List<string> Functions { get; set; } = new();
     [JsonPropertyName("conventions")] public string? Conventions { get; set; }
@@ -40,6 +49,13 @@ public sealed class ContextPack
         Terms.Select(t => t.Variable)
              .Concat(Timers)
              .Where(v => !string.IsNullOrWhiteSpace(v));
+}
+
+/// <summary>Another scenario in the profile, available to be referenced and flattened.</summary>
+public sealed class ScenarioRef
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("content")] public string Content { get; set; } = "";
 }
 
 /// <summary>The structured answer we require back from the model.</summary>

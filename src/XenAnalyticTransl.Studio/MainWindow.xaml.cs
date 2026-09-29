@@ -15,10 +15,54 @@ public sealed class Scenario
     public override string ToString() => Name;
 }
 
+/// <summary>
+/// One row of the Properties tree, mirroring the production app: a property
+/// (Operation Mode) holding its states (Auto, Manual). A leaf - or a childless
+/// property like Run Fail Timer - is what carries a PLC variable.
+/// </summary>
+public sealed class PropertyNode : System.ComponentModel.INotifyPropertyChanged
+{
+    private string _variable = "";
+    private string _type = "";
+
+    public string Name { get; set; } = "";
+    public ObservableCollection<PropertyNode> Children { get; } = new();
+    public PropertyNode? Parent { get; set; }
+
+    public string Variable
+    {
+        get => _variable;
+        set { _variable = value; Changed(nameof(Variable)); Changed(nameof(VariableHint)); }
+    }
+
+    public string Type
+    {
+        get => _type;
+        set { _type = value; Changed(nameof(Type)); Changed(nameof(VariableHint)); }
+    }
+
+    /// <summary>Parent properties are bold, like the production tree.</summary>
+    public string Weight => Children.Count > 0 ? "SemiBold" : "Normal";
+
+    /// <summary>Grey hint beside the name so the mapping is visible without clicking.</summary>
+    public string VariableHint =>
+        string.IsNullOrWhiteSpace(Variable) ? "" :
+        string.IsNullOrWhiteSpace(Type) ? Variable : $"{Variable} : {Type}";
+
+    /// <summary>The full term name sent to the model: "Operation Mode Auto".</summary>
+    public string QualifiedName =>
+        Parent is null ? Name : $"{Parent.Name} {Name}";
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Changed(string n) =>
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(n));
+}
+
 public partial class MainWindow : Window
 {
     private readonly ObservableCollection<Scenario> _scenarios = new();
-    private readonly ObservableCollection<Term> _terms = new();
+    private readonly ObservableCollection<PropertyNode> _properties = new();
+    private bool _suppressAssocSync;
     private readonly LlmTranslator _translator = new();
     private readonly HttpClient _usageHttp = new();
 
@@ -42,7 +86,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         ScenarioList.ItemsSource = _scenarios;
-        TermGrid.ItemsSource = _terms;
+        PropertyTree.ItemsSource = _properties;
 
         foreach (var p in ProviderPresets.All) ProviderBox.Items.Add(p.ProviderName);
         ProviderBox.SelectedIndex = 0;
@@ -216,12 +260,74 @@ public partial class MainWindow : Window
         if (ScenarioList.SelectedItem is Scenario s) _scenarios.Remove(s);
     }
 
-    private void AddTerm_Click(object sender, RoutedEventArgs e) =>
-        _terms.Add(new Term { Name = "New term", Variable = "", Value = "" });
+    // ---------------------------------------------------------------- properties tree
 
-    private void DeleteTerm_Click(object sender, RoutedEventArgs e)
+    private void AddProperty_Click(object sender, RoutedEventArgs e)
     {
-        if (TermGrid.SelectedItem is Term t) _terms.Remove(t);
+        var n = new PropertyNode { Name = "New property" };
+        _properties.Add(n);
+        Status("Property added. Select it and fill in the PLC variable below.");
+    }
+
+    private void AddState_Click(object sender, RoutedEventArgs e)
+    {
+        if (PropertyTree.SelectedItem is not PropertyNode sel)
+        {
+            Status("Select a property first, then Add State.");
+            return;
+        }
+        // A state always hangs off a property, never off another state.
+        var parent = sel.Parent ?? sel;
+        parent.Children.Add(new PropertyNode { Name = "New state", Parent = parent });
+    }
+
+    private void DeleteNode_Click(object sender, RoutedEventArgs e)
+    {
+        if (PropertyTree.SelectedItem is not PropertyNode sel) return;
+        if (sel.Parent is null) _properties.Remove(sel);
+        else sel.Parent.Children.Remove(sel);
+    }
+
+    private void PropertyTree_SelectedItemChanged(object sender,
+        RoutedPropertyChangedEventArgs<object> e)
+    {
+        _suppressAssocSync = true;
+        if (e.NewValue is PropertyNode n)
+        {
+            AssocVariable.Text = n.Variable;
+            AssocType.Text = n.Type;
+            AssocVariable.IsEnabled = AssocType.IsEnabled = true;
+        }
+        else
+        {
+            AssocVariable.Text = AssocType.Text = "";
+            AssocVariable.IsEnabled = AssocType.IsEnabled = false;
+        }
+        _suppressAssocSync = false;
+    }
+
+    private void Assoc_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressAssocSync) return;
+        if (PropertyTree.SelectedItem is not PropertyNode n) return;
+        n.Variable = AssocVariable.Text.Trim();
+        n.Type = AssocType.Text.Trim();
+    }
+
+    /// <summary>Flattens the tree into the terms the model is allowed to use.</summary>
+    private List<Term> CollectTerms()
+    {
+        var terms = new List<Term>();
+
+        void Walk(PropertyNode n)
+        {
+            if (!string.IsNullOrWhiteSpace(n.Variable))
+                terms.Add(new Term { Name = n.QualifiedName, Variable = n.Variable, Type = n.Type });
+            foreach (var c in n.Children) Walk(c);
+        }
+
+        foreach (var p in _properties) Walk(p);
+        return terms;
     }
 
     private void LoadSample_Click(object sender, RoutedEventArgs e) => LoadSample();
@@ -278,12 +384,20 @@ public partial class MainWindow : Window
 
     private ContextPack BuildContextPack() => new()
     {
-        Equipment = "Mtr01",
+        Equipment = "Motor",
         TargetLanguage = "SCL",
         Scenario = ScenarioText.Text,
-        Terms = _terms.Where(t => !string.IsNullOrWhiteSpace(t.Variable)).ToList(),
-        Timers = _terms.Where(t => t.Variable.EndsWith("Timer", StringComparison.OrdinalIgnoreCase))
-                       .Select(t => t.Variable).Distinct().ToList(),
+        // Every other scenario goes along, so references like "auto run ready" can be
+        // resolved and flattened instead of guessed at.
+        ReferencedScenarios = _scenarios
+            .Where(s => !ReferenceEquals(s, ScenarioList.SelectedItem)
+                        && !string.IsNullOrWhiteSpace(s.Text))
+            .Select(s => new ScenarioRef { Name = s.Name, Content = s.Text })
+            .ToList(),
+        Terms = CollectTerms(),
+        Timers = CollectTerms()
+            .Where(t => string.Equals(t.Type, "TON", StringComparison.OrdinalIgnoreCase))
+            .Select(t => t.Variable).Distinct().ToList(),
         Functions = new List<string> { "PLC Timer", "Time Recorder" },
         Conventions = "Siemens TIA Portal SCL. Comment each block with the sentence it implements."
     };
@@ -429,15 +543,15 @@ public partial class MainWindow : Window
 
     private void BuildReferenceTree()
     {
-        var profile = new TreeViewItem { Header = "Profile 1", IsExpanded = true };
+        var profile = new TreeViewItem { Header = "Lipico", IsExpanded = true };
         var equip = new TreeViewItem { Header = "Equipment Type", IsExpanded = true };
-        equip.Items.Add(new TreeViewItem { Header = "Mtr01", IsSelected = true });
-        equip.Items.Add(new TreeViewItem { Header = "Vlv01" });
+        equip.Items.Add(new TreeViewItem { Header = "Motor", IsSelected = true });
+        equip.Items.Add(new TreeViewItem { Header = "Valve" });
         profile.Items.Add(equip);
 
-        var fn = new TreeViewItem { Header = "Functions", IsExpanded = true };
-        fn.Items.Add(new TreeViewItem { Header = "PLC Timer" });
-        fn.Items.Add(new TreeViewItem { Header = "Time Recorder" });
+        var fn = new TreeViewItem { Header = "Function", IsExpanded = true };
+        fn.Items.Add(new TreeViewItem { Header = "Run Fail Timer" });
+        fn.Items.Add(new TreeViewItem { Header = "Runtime Recorder" });
 
         ReferenceTree.Items.Add(profile);
         ReferenceTree.Items.Add(fn);
@@ -446,41 +560,101 @@ public partial class MainWindow : Window
 
     private void LoadSample()
     {
+        // The Motor profile as it stands in the real app. These scenarios reference each
+        // other by name, which is what the flattening rules in the system prompt act on.
         _scenarios.Clear();
-        _scenarios.Add(new Scenario
-        {
-            Name = "Operation",
-            Text =
-                "When in Auto Mode, Manual Operation position will change and retain according with Input Run Signal.\n\n" +
-                "During PLC Initializing or MCC Trip On, the Manual Operation position will be in Stop.\n\n" +
-                "During PLC Initializing, Run Fail Alarm Timer Setpoint assigned value 10 seconds.\n\n" +
-                "During PLC Initializing, Trip Alarm Timer Setpoint assigned value 3 seconds.\n\n" +
-                "Trip Alarm Timer will start counting when have Trip Feedback On. If the Trip Alarm Timer elapsed, " +
-                "Trip Alarm will turn on. Trip Alarm will off and Trip Alarm Timer will be reset when Trip Feedback is off.\n\n" +
-                "When Trip Alarm On, Trip Buzzer will turn on and retain. Trip Buzzer only can be reset by operator."
-        });
-        _scenarios.Add(new Scenario { Name = "System Handle", Text = "" });
-        _scenarios.Add(new Scenario { Name = "S1 - Manual Run Fulfilled", Text = "" });
-        _scenarios.Add(new Scenario { Name = "S2 - Auto Run Fulfilled", Text = "" });
+        void S(string name, string text) => _scenarios.Add(new Scenario { Name = name, Text = text });
+
+        S("Operation",
+            "When auto run ready or manual run ready and no faults, then will command run.");
+
+        S("System Handle",
+            "When operation mode in Auto, the Manual Start/Stop position will according with " +
+            "Operation Signal Run/Stop.\n\n" +
+            "During PLC Initialize or MCC Trip On, the Manual Operation position will be in Stop.\n\n" +
+            "During PLC Initialize, Run Fail Timer's delay time Set to 10 seconds.\n\n" +
+            "Operation Signal Run time will be recorded by runtime recorder.");
+
+        S("Run Failed",
+            "When Operation signal Run not received after run fail timer elapsed, turn on Run Fail alarm, " +
+            "turn on Run Fail Buzzer once. When HMI Acknowledge, turn off Run Fail Buzzer.");
+
+        S("Auto run ready",
+            "When operation mode in Auto and Sequence Auto is fulfilled.");
+
+        S("Manual run ready",
+            "When operation mode in Manual and manual started.");
+
+        S("Faults",
+            "When trip alarm is on or run fail alarm is on.");
+
+        S("Trip",
+            "When Trip Signal is On, turn on Trip Alarm, turn on Trip Buzzer once. " +
+            "When HMI Acknowledge, turn off Trip Buzzer.");
+
         ScenarioList.SelectedIndex = 0;
 
-        _terms.Clear();
-        void T(string name, string variable, string type, string? value = null) =>
-            _terms.Add(new Term { Name = name, Variable = variable, Type = type, Value = value });
+        // The Properties tree of the Motor profile: a property, then its states.
+        _properties.Clear();
 
-        T("Auto Mode", "AutoMode", "BOOL");
-        T("Manual Operation", "ManualOperation", "BOOL");
-        T("Input Run Signal", "InputRunSignal", "BOOL");
-        T("PLC Initializing", "Sys_plsInit", "INT", "1");
-        T("MCC Trip On", "MCC_Trip", "INT", "1");
-        T("Run Fail Alarm Timer", "RunFailAlarmTimer", "TON");
-        T("Trip Alarm Timer", "TripAlarmTimer", "TON");
-        T("Trip Feedback", "TripFeedback", "BOOL");
-        T("Trip Alarm", "TripAlarm", "BOOL");
-        T("Trip Buzzer", "TripBuzzer", "BOOL");
-        T("Operator Reset Buzzer", "OperatorResetBuzzer", "BOOL");
+        PropertyNode P(string name, string variable = "", string type = "")
+        {
+            var n = new PropertyNode { Name = name, Variable = variable, Type = type };
+            _properties.Add(n);
+            return n;
+        }
+        void St(PropertyNode parent, string name, string variable, string type = "BOOL") =>
+            parent.Children.Add(new PropertyNode
+            { Name = name, Variable = variable, Type = type, Parent = parent });
 
-        Status("Sample Mtr01 scenario loaded. Set your key, then click Request AI Translator.");
+        var opMode = P("Operation Mode");
+        St(opMode, "Auto",   "OpMode_Auto");
+        St(opMode, "Manual", "OpMode_Manual");
+
+        var manual = P("Manual");
+        St(manual, "Start", "Manual_Start");
+        St(manual, "Stop",  "Manual_Stop");
+
+        var tripSig = P("Trip Signal");
+        St(tripSig, "On",  "TripSignal");
+        St(tripSig, "Off", "TripSignal_Off");
+
+        var opSig = P("Operation Signal");
+        St(opSig, "Run",  "OpSignal_Run");
+        St(opSig, "Stop", "OpSignal_Stop");
+
+        var cmd = P("Command");
+        St(cmd, "Run",  "Cmd_Run");
+        St(cmd, "Stop", "Cmd_Stop");
+
+        P("Run Fail Timer",   "RunFailTimer",    "TON");
+        P("Runtime recorder", "RuntimeRecorder", "TIME");
+
+        var tripAlarm = P("Trip Alarm");
+        St(tripAlarm, "On",  "TripAlarm");
+        St(tripAlarm, "Off", "TripAlarm_Off");
+
+        var runFailAlarm = P("Run Fail Alarm");
+        St(runFailAlarm, "On",  "RunFailAlarm");
+        St(runFailAlarm, "Off", "RunFailAlarm_Off");
+
+        var seqAuto = P("Sequence Auto");
+        St(seqAuto, "Fulfilled",   "SeqAuto_Fulfilled");
+        St(seqAuto, "Unfulfilled", "SeqAuto_Unfulfilled");
+
+        var runFailBuzzer = P("Run Fail Buzzer");
+        St(runFailBuzzer, "On",  "RunFailBuzzer");
+        St(runFailBuzzer, "Off", "RunFailBuzzer_Off");
+
+        var tripBuzzer = P("Trip Buzzer");
+        St(tripBuzzer, "On",  "TripBuzzer");
+        St(tripBuzzer, "Off", "TripBuzzer_Off");
+
+        P("HMI Acknowledge", "HMI_Ack",     "BOOL");
+        P("PLC Initialize",  "Sys_plsInit", "BOOL");
+        P("MCC Trip",        "MCC_Trip",    "BOOL");
+
+        Status("Motor profile loaded - 7 scenarios. Pick one, then click Request AI Translator.");
     }
 
     protected override void OnClosed(EventArgs e)
@@ -490,6 +664,8 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 }
+
+
 
 
 
