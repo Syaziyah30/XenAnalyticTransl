@@ -46,17 +46,17 @@ var pack = new ContextPack
         "When Trip Alarm On, Trip Buzzer will turn on and retain. Trip Buzzer only can be reset by operator.",
     Terms =
     [
-        new Term { Name = "Auto Mode",            Variable = "AutoMode" },
-        new Term { Name = "Manual Operation",     Variable = "ManualOperation" },
-        new Term { Name = "Input Run Signal",     Variable = "InputRunSignal" },
-        new Term { Name = "PLC Initializing",     Variable = "Sys_plsInit", Value = "1" },
-        new Term { Name = "MCC Trip On",          Variable = "MCC_Trip", Value = "1" },
-        new Term { Name = "Run Fail Alarm Timer", Variable = "RunFailAlarmTimer" },
-        new Term { Name = "Trip Alarm Timer",     Variable = "TripAlarmTimer" },
-        new Term { Name = "Trip Feedback",        Variable = "TripFeedback" },
-        new Term { Name = "Trip Alarm",           Variable = "TripAlarm" },
-        new Term { Name = "Trip Buzzer",          Variable = "TripBuzzer" },
-        new Term { Name = "Operator Reset Buzzer", Variable = "OperatorResetBuzzer" },
+        new Term { Name = "Auto Mode",            Variable = "AutoMode", Type = "BOOL" },
+        new Term { Name = "Manual Operation",     Variable = "ManualOperation", Type = "BOOL" },
+        new Term { Name = "Input Run Signal",     Variable = "InputRunSignal", Type = "BOOL" },
+        new Term { Name = "PLC Initializing",     Variable = "Sys_plsInit", Type = "INT", Value = "1" },
+        new Term { Name = "MCC Trip On",          Variable = "MCC_Trip", Type = "INT", Value = "1" },
+        new Term { Name = "Run Fail Alarm Timer", Variable = "RunFailAlarmTimer", Type = "TON" },
+        new Term { Name = "Trip Alarm Timer",     Variable = "TripAlarmTimer", Type = "TON" },
+        new Term { Name = "Trip Feedback",        Variable = "TripFeedback", Type = "BOOL" },
+        new Term { Name = "Trip Alarm",           Variable = "TripAlarm", Type = "BOOL" },
+        new Term { Name = "Trip Buzzer",          Variable = "TripBuzzer", Type = "BOOL" },
+        new Term { Name = "Operator Reset Buzzer", Variable = "OperatorResetBuzzer", Type = "BOOL" },
     ],
     Timers = ["RunFailAlarmTimer", "TripAlarmTimer"],
     Functions = ["PLC Timer", "Time Recorder"],
@@ -95,4 +95,5 @@ Console.WriteLine();
 Console.WriteLine("=== MODEL WARNINGS ===");
 Console.WriteLine(r.Warnings.Count == 0 ? "none" : string.Join("\n", r.Warnings.Select(w => "- " + w)));
 return 0;
+
 

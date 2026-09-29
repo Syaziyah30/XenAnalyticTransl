@@ -15,7 +15,12 @@ public sealed class LlmSettings
     public string Model { get; set; } = "";
     /// <summary>Environment variable that holds the key. The key itself is never stored here.</summary>
     public string ApiKeyEnvVar { get; set; } = "";
-    public double Temperature { get; set; } = 0.1;
+    /// <summary>
+    /// 0 = always take the most likely token. Does not make output perfectly
+    /// reproducible - GPU batching and provider routing still vary - but it removes
+    /// the sampling randomness that is ours to control.
+    /// </summary>
+    public double Temperature { get; set; } = 0.0;
 
     /// <summary>
     /// Whether to send `temperature` at all. Default ON.
@@ -125,6 +130,14 @@ public static class ProviderPresets
                 Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
                 InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
 
+        // Hugging Face Inference Providers - an OpenAI-compatible router over Together,
+        // fal, Replicate and others. Has a free tier; paid rates are the provider's own,
+        // so the cost estimate below is left at zero rather than guessed.
+        new() { ProviderName = "HuggingFace - Llama 3.1 8B Instruct",
+                BaseUrl = "https://router.huggingface.co/v1",
+                Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
         // Claude direct, via Anthropic's OpenAI-compatibility layer.
         // Anthropic documents this as a testing/comparison path, not production - fine for
         // R&D model comparison. Model ids use dashes: claude-opus-5, claude-sonnet-5.
@@ -149,7 +162,20 @@ public static class ProviderPresets
                 InputUsdPerM = 2m, OutputUsdPerM = 10m,
                 SendTemperature = false },
 
-    };
+        // GPT through the SAME OpenRouter key - no Anthropic account needed.
+        new() { ProviderName = "OpenRouter - GPT 5.6 Luna (needs credit)",
+				BaseUrl = "https://openrouter.ai/api/v1",
+				Model = "openai/gpt-5.6-luna", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+				InputUsdPerM = 0.2m, OutputUsdPerM = 1.2m},
+
+        // Hugging Face Inference Providers - an OpenAI-compatible router over Together,
+        new() { ProviderName = "HuggingFace - Llama 3.1 8B Instruct",
+		        BaseUrl = "https://router.huggingface.co/v1",
+		        Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
+		        InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+
+	};
 }
 
 /// <summary>
@@ -303,9 +329,22 @@ public sealed class LlmTranslator : IDisposable
 
         // ---- parse the model's JSON answer ----
         TranslationResult? result;
+        var cleaned = StripFences(content);
         try
         {
-            result = JsonSerializer.Deserialize<TranslationResult>(StripFences(content));
+            result = JsonSerializer.Deserialize<TranslationResult>(cleaned);
+        }
+        catch (JsonException)
+        {
+            // Second chance: escape raw control characters inside string literals.
+            try
+            {
+                result = JsonSerializer.Deserialize<TranslationResult>(RepairControlChars(cleaned));
+            }
+            catch (Exception ex)
+            {
+                return Fail(settings, sw, $"Model did not return valid JSON: {ex.Message}", content, requestJson);
+            }
         }
         catch (Exception ex)
         {
@@ -330,6 +369,36 @@ public sealed class LlmTranslator : IDisposable
             RawResponse = content,
             RequestBody = requestJson
         };
+    }
+
+    /// <summary>
+    /// Escapes raw control characters that appear INSIDE a JSON string literal.
+    ///
+    /// Smaller models routinely emit a code block with real newlines inside the "code"
+    /// value, which is invalid JSON even though the intent is obvious. Rather than fail
+    /// the whole run, walk the text tracking whether we are inside a string and escape
+    /// the offending characters. Leaves well-formed JSON untouched.
+    /// </summary>
+    private static string RepairControlChars(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length + 64);
+        bool inString = false, escaped = false;
+
+        foreach (var ch in s)
+        {
+            if (escaped) { sb.Append(ch); escaped = false; continue; }
+
+            switch (ch)
+            {
+                case '\\' when inString: sb.Append(ch); escaped = true; break;
+                case '"': inString = !inString; sb.Append(ch); break;
+                case '\n' when inString: sb.Append("\\n"); break;
+                case '\r' when inString: sb.Append("\\r"); break;
+                case '\t' when inString: sb.Append("\\t"); break;
+                default: sb.Append(ch); break;
+            }
+        }
+        return sb.ToString();
     }
 
     /// <summary>Some models wrap JSON in ```json fences despite being told not to.</summary>
@@ -358,6 +427,7 @@ public sealed class LlmTranslator : IDisposable
 
     public void Dispose() => _http.Dispose();
 }
+
 
 
 

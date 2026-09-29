@@ -7,6 +7,14 @@ public sealed class Term
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("variable")] public string Variable { get; set; } = "";
+    /// <summary>
+    /// IEC data type: BOOL, INT, REAL, TIME, TON...
+    ///
+    /// Leave it blank and the model guesses - and guesses differently run to run
+    /// ("ManualOperation := FALSE" one time, ":= 0" the next). Stating the type is
+    /// the single most effective way to make output reproducible.
+    /// </summary>
+    [JsonPropertyName("type")] public string? Type { get; set; }
     [JsonPropertyName("value")] public string? Value { get; set; }
     [JsonPropertyName("states")] public List<string>? States { get; set; }
 }

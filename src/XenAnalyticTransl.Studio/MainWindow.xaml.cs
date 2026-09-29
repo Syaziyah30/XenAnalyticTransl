@@ -465,20 +465,20 @@ public partial class MainWindow : Window
         ScenarioList.SelectedIndex = 0;
 
         _terms.Clear();
-        void T(string name, string variable, string? value = null) =>
-            _terms.Add(new Term { Name = name, Variable = variable, Value = value });
+        void T(string name, string variable, string type, string? value = null) =>
+            _terms.Add(new Term { Name = name, Variable = variable, Type = type, Value = value });
 
-        T("Auto Mode", "AutoMode");
-        T("Manual Operation", "ManualOperation");
-        T("Input Run Signal", "InputRunSignal");
-        T("PLC Initializing", "Sys_plsInit", "1");
-        T("MCC Trip On", "MCC_Trip", "1");
-        T("Run Fail Alarm Timer", "RunFailAlarmTimer");
-        T("Trip Alarm Timer", "TripAlarmTimer");
-        T("Trip Feedback", "TripFeedback");
-        T("Trip Alarm", "TripAlarm");
-        T("Trip Buzzer", "TripBuzzer");
-        T("Operator Reset Buzzer", "OperatorResetBuzzer");
+        T("Auto Mode", "AutoMode", "BOOL");
+        T("Manual Operation", "ManualOperation", "BOOL");
+        T("Input Run Signal", "InputRunSignal", "BOOL");
+        T("PLC Initializing", "Sys_plsInit", "INT", "1");
+        T("MCC Trip On", "MCC_Trip", "INT", "1");
+        T("Run Fail Alarm Timer", "RunFailAlarmTimer", "TON");
+        T("Trip Alarm Timer", "TripAlarmTimer", "TON");
+        T("Trip Feedback", "TripFeedback", "BOOL");
+        T("Trip Alarm", "TripAlarm", "BOOL");
+        T("Trip Buzzer", "TripBuzzer", "BOOL");
+        T("Operator Reset Buzzer", "OperatorResetBuzzer", "BOOL");
 
         Status("Sample Mtr01 scenario loaded. Set your key, then click Request AI Translator.");
     }
@@ -490,6 +490,7 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 }
+
 
 
 

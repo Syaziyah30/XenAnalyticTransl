@@ -34,6 +34,10 @@ public static class PromptBuilder
         6. Do not emit a variable declaration block (VAR ... END_VAR) - the project already
            declares these tags. Emit executable logic only.
         7. Prefer several small IF blocks in scenario order over one nested condition.
+        8. Respect each term's declared type exactly. A BOOL is assigned TRUE or FALSE and
+           tested bare (IF Flag THEN), never 1 or 0. An INT is assigned and compared with
+           numbers (IF Count = 1 THEN). If a term has no type given, say so in a warning
+           and pick the type the scenario implies - do not switch conventions mid-file.
 
         WARNINGS - add one for each of these when it applies:
         - the scenario does not say what happens in some state
@@ -72,6 +76,7 @@ public static class PromptBuilder
             foreach (var t in pack.Terms)
             {
                 sb.Append($"- \"{t.Name}\" -> {t.Variable}");
+                if (!string.IsNullOrWhiteSpace(t.Type)) sb.Append($" : {t.Type}");
                 if (!string.IsNullOrWhiteSpace(t.Value)) sb.Append($" (active value: {t.Value})");
                 if (t.States is { Count: > 0 }) sb.Append($" (states: {string.Join(", ", t.States)})");
                 sb.AppendLine();
