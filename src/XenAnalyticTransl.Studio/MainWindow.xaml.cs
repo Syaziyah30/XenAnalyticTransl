@@ -273,7 +273,8 @@ public partial class MainWindow : Window
             SendTemperature = preset.SendTemperature,
             ExtraBody = preset.ExtraBody,
             InputUsdPerM = preset.InputUsdPerM,
-            OutputUsdPerM = preset.OutputUsdPerM
+            OutputUsdPerM = preset.OutputUsdPerM,
+            TimeoutSeconds = preset.TimeoutSeconds
         };
     }
 
@@ -569,9 +570,16 @@ public partial class MainWindow : Window
         }
 
         var ok = done - failed - flagged;
-        Status($"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  " +
-               $"{ok} clean, {flagged} with unknown identifiers, {failed} failed  |  " +
-               "click a scenario to see its code.");
+        var summary = $"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  " +
+                      $"{ok} clean, {flagged} with unknown identifiers, {failed} failed";
+
+        // When everything failed it is almost always one cause - say what it was rather
+        // than making the reader click a scenario to find out.
+        var firstError = todo.FirstOrDefault(s => s.Outcome is { Ok: false })?.Outcome?.Error;
+        if (failed == done && firstError is not null)
+            Status($"{summary}  |  ALL FAILED: {firstError}");
+        else
+            Status($"{summary}  |  click a scenario to see its code.");
     }
 
     /// <summary>Shows a scenario's stored result, or clears the panel if it has none.</summary>

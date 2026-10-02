@@ -41,7 +41,15 @@ public sealed class LlmSettings
     /// </summary>
     public bool RequestJsonMode { get; set; } = false;
 
-    public int TimeoutSeconds { get; set; } = 120;
+    /// <summary>
+    /// Seconds to wait for a reply. ZERO OR LESS MEANS NO DEADLINE - the call runs until
+    /// the model answers or the user presses Cancel.
+    ///
+    /// No deadline is the default: a slow model is still a useful model, and cutting it
+    /// off wastes the tokens already generated. The cost is that a dead connection waits
+    /// forever, so Cancel is the only way out of a stall.
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 0;
 
     /// <summary>
     /// Output ceiling. Must be sent: providers that meter against a credit balance
@@ -190,6 +198,11 @@ public sealed class LlmTranslator : IDisposable
     public LlmTranslator(HttpClient? http = null)
     {
         _http = http ?? new HttpClient();
+
+        // HttpClient defaults to 100 seconds and throws its own TaskCanceledException,
+        // which used to fire before our own deadline and get reported with the wrong
+        // number. Timing is this class's business, so disable the built-in one.
+        _http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<TranslationOutcome> TranslateAsync(
@@ -248,7 +261,8 @@ public sealed class LlmTranslator : IDisposable
                 req.Content = JsonContent.Create(body);
 
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(settings.TimeoutSeconds));
+                if (settings.TimeoutSeconds > 0)                      // 0 = no deadline
+                    timeout.CancelAfter(TimeSpan.FromSeconds(settings.TimeoutSeconds));
 
                 using var resp = await _http.SendAsync(req, timeout.Token).ConfigureAwait(false);
                 raw = await resp.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
@@ -275,7 +289,9 @@ public sealed class LlmTranslator : IDisposable
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return Fail(settings, sw, $"Timed out after {settings.TimeoutSeconds}s.", null, requestJson);
+                return Fail(settings, sw,
+                    $"Timed out after {sw.Elapsed.TotalSeconds:0}s (limit {settings.TimeoutSeconds}s).",
+                    null, requestJson);
             }
             catch (OperationCanceledException)
             {
@@ -479,6 +495,9 @@ public sealed class LlmTranslator : IDisposable
 
     public void Dispose() => _http.Dispose();
 }
+
+
+
 
 
 
