@@ -176,11 +176,41 @@
                         <Button Content="Delete Scenario" Click="DeleteScenario_Click"/>
                         <Button Content="Load Sample" Click="LoadSample_Click"/>
                     </StackPanel>
-                    <ListBox x:Name="ScenarioList" DockPanel.Dock="Left" Width="150" Margin="6,0,0,6"
-                             SelectionChanged="ScenarioList_SelectionChanged"/>
-                    <TextBox x:Name="ScenarioText" Margin="6" AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" FontSize="13" Padding="8"
-                             TextChanged="ScenarioText_TextChanged"/>
+                    <ListBox x:Name="ScenarioList" DockPanel.Dock="Left" Width="165" Margin="6,0,0,6"
+                             SelectionChanged="ScenarioList_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
+                                               FontWeight="Bold" Width="18"/>
+                                    <TextBlock Text="{Binding Name}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <DockPanel Margin="6">
+                        <!-- legend for the highlighting -->
+                        <WrapPanel DockPanel.Dock="Bottom" Margin="2,6,0,0">
+                            <TextBlock Text="Scenario" Foreground="#C05621" FontWeight="SemiBold"
+                                       FontSize="11" Margin="0,0,14,0"/>
+                            <TextBlock Text="Property" Foreground="#1E5631" FontWeight="SemiBold"
+                                       FontSize="11" Margin="0,0,14,0"/>
+                            <TextBlock Text="Term" Foreground="#2E8B57" FontSize="11" Margin="0,0,14,0"/>
+                            <TextBlock Text="Constant / keyword" Foreground="#1668C1" FontSize="11" Margin="0,0,14,0"/>
+                            <TextBlock Text="Vocabulary" Foreground="#1A1A1A" FontSize="11"/>
+                        </WrapPanel>
+
+                        <RichTextBox x:Name="ScenarioText" FontSize="14" Padding="8"
+                                     VerticalScrollBarVisibility="Auto"
+                                     AcceptsReturn="True" AcceptsTab="False"
+                                     TextChanged="ScenarioText_TextChanged">
+                            <RichTextBox.Resources>
+                                <Style TargetType="Paragraph">
+                                    <Setter Property="Margin" Value="0,0,0,10"/>
+                                </Style>
+                            </RichTextBox.Resources>
+                        </RichTextBox>
+                    </DockPanel>
                 </DockPanel>
             </Border>
 
@@ -255,7 +285,8 @@
                             <HierarchicalDataTemplate DataType="{x:Type local:PropertyNode}"
                                                       ItemsSource="{Binding Children}">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding Name}" FontWeight="{Binding Weight}"/>
+                                    <TextBlock Text="{Binding Name}" FontWeight="{Binding Weight}"
+                                               Foreground="{Binding NodeBrush}"/>
                                     <TextBlock Text="{Binding VariableHint}" Foreground="#8892A6"
                                                FontSize="11" Margin="10,1,0,0"/>
                                 </StackPanel>
@@ -345,6 +376,7 @@
         </Border>
     </Grid>
 </Window>
+
 
 
 

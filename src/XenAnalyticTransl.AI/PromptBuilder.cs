@@ -191,6 +191,13 @@ public static class PromptBuilder
         - "code" holds executable logic only. Do NOT emit a declaration block
           (VAR ... END_VAR) - the project already declares these tags.
         - Comment each block with the sentence of the Scenario it implements.
+        - A comment states WHAT a block does, in one line. Never write your own
+          deliberation into the code: no "let me check", no "wait", no weighing of
+          alternatives, no questions to yourself, no notes about what you decided and
+          why. Reasoning belongs in "explanation"; doubt belongs in "warnings". A reader
+          of "code" should see SCL and the scenario sentences, nothing else.
+        - If a variable cannot be resolved, do not argue about it in the code. Write the
+          logic you can, leave out what you cannot, and say so in "warnings".
         - Prefer several small IF blocks in Scenario order over one nested condition.
         - "variables_used" must list every identifier the code references. It is checked
           against the tag table, so an invented name will be caught.

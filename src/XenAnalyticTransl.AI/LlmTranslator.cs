@@ -336,14 +336,24 @@ public sealed class LlmTranslator : IDisposable
         }
         catch (JsonException)
         {
-            // Second chance: escape raw control characters inside string literals.
+            // Two more chances, in order of likelihood:
+            //   1. prose wrapped around the object - dig the object out
+            //   2. raw control characters inside a string literal - escape them
+            var salvaged = ExtractJsonObject(cleaned) ?? cleaned;
             try
             {
-                result = JsonSerializer.Deserialize<TranslationResult>(RepairControlChars(cleaned));
+                result = JsonSerializer.Deserialize<TranslationResult>(salvaged);
             }
-            catch (Exception ex)
+            catch (JsonException)
             {
-                return Fail(settings, sw, $"Model did not return valid JSON: {ex.Message}", content, requestJson);
+                try
+                {
+                    result = JsonSerializer.Deserialize<TranslationResult>(RepairControlChars(salvaged));
+                }
+                catch (Exception ex)
+                {
+                    return Fail(settings, sw, $"Model did not return valid JSON: {ex.Message}", content, requestJson);
+                }
             }
         }
         catch (Exception ex)
@@ -353,6 +363,17 @@ public sealed class LlmTranslator : IDisposable
 
         if (result is null)
             return Fail(settings, sw, "Model returned an empty result.", content, requestJson);
+
+        // Some models write their deliberation into the code as comments however firmly
+        // the prompt forbids it. Strip it; note it so the behaviour stays visible.
+        var (cleaned2, removed) = CodeCleaner.Clean(result.Code);
+        if (removed > 0)
+        {
+            result.Code = cleaned2;
+            result.Warnings.Add(
+                $"{removed} comment line(s) of model deliberation were stripped from the code. " +
+                "The reasoning is in the explanation; only SCL and scenario comments are kept here.");
+        }
 
         var unknown = TagValidator.FindUnknown(result, pack).ToList();
 
@@ -401,6 +422,37 @@ public sealed class LlmTranslator : IDisposable
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Pulls the first complete JSON object out of a reply that also contains prose.
+    ///
+    /// Models often explain their reasoning before answering, however firmly the prompt
+    /// says otherwise - Claude in particular writes a paragraph of analysis and then the
+    /// object. Scans for a balanced pair of braces, ignoring any inside string literals.
+    /// Returns null when there is nothing object-shaped to find.
+    /// </summary>
+    private static string? ExtractJsonObject(string s)
+    {
+        var start = s.IndexOf('{');
+        if (start < 0) return null;
+
+        int depth = 0;
+        bool inString = false, escaped = false;
+
+        for (var i = start; i < s.Length; i++)
+        {
+            var ch = s[i];
+
+            if (escaped) { escaped = false; continue; }
+            if (ch == '\\' && inString) { escaped = true; continue; }
+            if (ch == '"') { inString = !inString; continue; }
+            if (inString) continue;
+
+            if (ch == '{') depth++;
+            else if (ch == '}' && --depth == 0) return s[start..(i + 1)];
+        }
+        return null;   // unbalanced - truncated reply
+    }
+
     /// <summary>Some models wrap JSON in ```json fences despite being told not to.</summary>
     private static string StripFences(string s)
     {
@@ -427,6 +479,8 @@ public sealed class LlmTranslator : IDisposable
 
     public void Dispose() => _http.Dispose();
 }
+
+
 
 
 

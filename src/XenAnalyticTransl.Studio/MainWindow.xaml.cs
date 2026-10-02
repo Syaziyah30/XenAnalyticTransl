@@ -1,6 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Net.Http;
+using System.Windows.Documents;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -8,11 +9,41 @@ using XenAnalyticTransl.AI;
 
 namespace XenAnalyticTransl.Studio;
 
-public sealed class Scenario
+public sealed class Scenario : System.ComponentModel.INotifyPropertyChanged
 {
+    private TranslationOutcome? _outcome;
+
     public string Name { get; set; } = "New scenario";
     public string Text { get; set; } = "";
+
+    /// <summary>The last translation of THIS scenario, kept so it can be browsed again.</summary>
+    public TranslationOutcome? Outcome
+    {
+        get => _outcome;
+        set
+        {
+            _outcome = value;
+            Changed(nameof(Outcome)); Changed(nameof(Status)); Changed(nameof(StatusBrush));
+        }
+    }
+
+    /// <summary>Marker beside the name in the list.</summary>
+    public string Status => _outcome is null ? ""
+        : !_outcome.Ok ? "✗"                                  // cross - failed
+        : _outcome.UnknownIdentifiers.Count > 0 ? "!"              // generated, but unknown names
+        : "✓";                                                // tick - clean
+
+    public System.Windows.Media.Brush StatusBrush => _outcome is null
+        ? System.Windows.Media.Brushes.Transparent
+        : !_outcome.Ok ? System.Windows.Media.Brushes.Firebrick
+        : _outcome.UnknownIdentifiers.Count > 0 ? System.Windows.Media.Brushes.DarkGoldenrod
+        : System.Windows.Media.Brushes.SeaGreen;
+
     public override string ToString() => Name;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Changed(string n) =>
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(n));
 }
 
 /// <summary>
@@ -25,9 +56,29 @@ public sealed class PropertyNode : System.ComponentModel.INotifyPropertyChanged
     private string _variable = "";
     private string _type = "";
 
+    private string _value = "";
+
     public string Name { get; set; } = "";
     public ObservableCollection<PropertyNode> Children { get; } = new();
     public PropertyNode? Parent { get; set; }
+
+    /// <summary>
+    /// PlcValue. In the real data the variable belongs to the PROPERTY and the value to
+    /// the STATE: Operation Mode is blnMA, with Auto = 0 and Manual = 1. So a state is a
+    /// value of its parent's variable, not a variable of its own.
+    /// </summary>
+    public string Value
+    {
+        get => _value;
+        set { _value = value; Changed(nameof(Value)); Changed(nameof(VariableHint)); }
+    }
+
+    /// <summary>The variable a state is tested against - its own, else its parent's.</summary>
+    public string EffectiveVariable =>
+        !string.IsNullOrWhiteSpace(Variable) ? Variable : Parent?.Variable ?? "";
+
+    public string EffectiveType =>
+        !string.IsNullOrWhiteSpace(Type) ? Type : Parent?.Type ?? "";
 
     public string Variable
     {
@@ -44,10 +95,29 @@ public sealed class PropertyNode : System.ComponentModel.INotifyPropertyChanged
     /// <summary>Parent properties are bold, like the production tree.</summary>
     public string Weight => Children.Count > 0 ? "SemiBold" : "Normal";
 
+    /// <summary>
+    /// Same colour code as the scenario editor, so the tree and the text agree:
+    /// a property is dark green, one of its states is green.
+    /// </summary>
+    public System.Windows.Media.Brush NodeBrush =>
+        Children.Count > 0 || Parent is null
+            ? ScenarioHighlighter.PropertyBrush
+            : ScenarioHighlighter.TermBrush;
+
     /// <summary>Grey hint beside the name so the mapping is visible without clicking.</summary>
-    public string VariableHint =>
-        string.IsNullOrWhiteSpace(Variable) ? "" :
-        string.IsNullOrWhiteSpace(Type) ? Variable : $"{Variable} : {Type}";
+    public string VariableHint
+    {
+        get
+        {
+            if (Children.Count > 0 || Parent is null)
+                return string.IsNullOrWhiteSpace(Variable) ? ""
+                     : string.IsNullOrWhiteSpace(Type) ? Variable : $"{Variable} : {Type}";
+            // a state reads as "blnMA = 0"
+            var v = EffectiveVariable;
+            if (string.IsNullOrWhiteSpace(v)) return "";
+            return string.IsNullOrWhiteSpace(Value) ? v : $"{v} = {Value}";
+        }
+    }
 
     /// <summary>The full term name sent to the model: "Operation Mode Auto".</summary>
     public string QualifiedName =>
@@ -63,6 +133,10 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<Scenario> _scenarios = new();
     private readonly ObservableCollection<PropertyNode> _properties = new();
     private bool _suppressAssocSync;
+
+    /// <summary>Every statement in the profile, from the Statement table.</summary>
+    private readonly List<(int EquipmentId, string Name, string Text)> _allScenarios = new();
+    private int _equipmentId = 1;   // 1 = Motor, 2 = Valve
     private readonly LlmTranslator _translator = new();
     private readonly HttpClient _usageHttp = new();
 
@@ -76,6 +150,10 @@ public partial class MainWindow : Window
         Interval = TimeSpan.FromMilliseconds(100)
     };
     private readonly System.Diagnostics.Stopwatch _runClock = new();
+
+    // Re-colouring on every keystroke fights the caret; wait for a pause.
+    private readonly System.Windows.Threading.DispatcherTimer _recolour = new()
+    { Interval = TimeSpan.FromMilliseconds(400) };
 
     // Local spend tally, for providers that publish no balance endpoint.
     private int _sessionRuns;
@@ -92,11 +170,17 @@ public partial class MainWindow : Window
         ProviderBox.SelectedIndex = 0;
 
         _tick.Tick += (_, _) => TimeText.Text = $"{_runClock.Elapsed.TotalSeconds:0.0} s";
+        _recolour.Tick += (_, _) => { _recolour.Stop(); Recolour(); };
 
         BuildReferenceTree();
         LoadSample();
         RefreshKeyStatus();
         _ = RefreshUsageAsync();
+
+        // Colour once everything is loaded and the window is up. Doing it only from the
+        // selection event is fragile - the event does not fire if the index is already 0.
+        Dispatcher.BeginInvoke(new Action(Recolour),
+            System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /// <summary>Starts the on-screen clock so a long call never looks like a hang.</summary>
@@ -234,18 +318,94 @@ public partial class MainWindow : Window
 
     // ---------------------------------------------------------------- scenarios
 
+    // ---------------------------------------------------------------- scenario text
+
+    /// <summary>The scenario as plain text, independent of the colouring.</summary>
+    private string ScenarioPlainText
+    {
+        get => new TextRange(ScenarioText.Document.ContentStart,
+                             ScenarioText.Document.ContentEnd).Text.TrimEnd('\r', '\n');
+        set
+        {
+            _suppressTextSync = true;
+            ScenarioText.Document = ScenarioHighlighter.Build(value, HighlightPhrases(), 14);
+            _suppressTextSync = false;
+        }
+    }
+
+    /// <summary>
+    /// Everything the editor should colour: scenario names, property names, state names.
+    /// Rebuilt on demand so renaming a property recolours the text.
+    /// </summary>
+    private List<ScenarioHighlighter.Phrase> HighlightPhrases()
+    {
+        var list = new List<ScenarioHighlighter.Phrase>();
+
+        foreach (var s in _scenarios)
+            list.Add(new(s.Name, TokenKind.Scenario));
+
+        void Walk(PropertyNode n)
+        {
+            list.Add(new(n.Name, n.Children.Count > 0 || n.Parent is null
+                ? TokenKind.Property : TokenKind.Term));
+            foreach (var c in n.Children) Walk(c);
+        }
+        foreach (var p in _properties) Walk(p);
+
+        return list;
+    }
+
     private void ScenarioList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ScenarioList.SelectedItem is not Scenario s) return;
-        _suppressTextSync = true;
-        ScenarioText.Text = s.Text;
-        _suppressTextSync = false;
+        ScenarioPlainText = s.Text;
+        ShowScenarioResult(s);     // every result tab follows the selection too
     }
 
     private void ScenarioText_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_suppressTextSync) return;
-        if (ScenarioList.SelectedItem is Scenario s) s.Text = ScenarioText.Text;
+        if (ScenarioList.SelectedItem is Scenario s) s.Text = ScenarioPlainText;
+
+        // Re-colour once typing pauses - doing it per keystroke fights the caret.
+        _recolour.Stop();
+        _recolour.Start();
+    }
+
+    /// <summary>Re-applies the colours, putting the caret back where it was.</summary>
+    private void Recolour()
+    {
+        if (ScenarioList.SelectedItem is not Scenario s) return;
+
+        var offset = CaretOffset();
+        _suppressTextSync = true;
+        ScenarioText.Document = ScenarioHighlighter.Build(s.Text, HighlightPhrases(), 14);
+        _suppressTextSync = false;
+        RestoreCaret(offset);
+    }
+
+    private int CaretOffset() =>
+        new TextRange(ScenarioText.Document.ContentStart, ScenarioText.CaretPosition).Text.Length;
+
+    private void RestoreCaret(int offset)
+    {
+        var pos = ScenarioText.Document.ContentStart;
+        var seen = 0;
+        while (pos is not null)
+        {
+            if (pos.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text)
+            {
+                var run = pos.GetTextInRun(LogicalDirection.Forward).Length;
+                if (seen + run >= offset)
+                {
+                    ScenarioText.CaretPosition = pos.GetPositionAtOffset(offset - seen) ?? pos;
+                    return;
+                }
+                seen += run;
+            }
+            pos = pos.GetNextContextPosition(LogicalDirection.Forward);
+        }
+        ScenarioText.CaretPosition = ScenarioText.Document.ContentEnd;
     }
 
     private void AddScenario_Click(object sender, RoutedEventArgs e)
@@ -321,8 +481,18 @@ public partial class MainWindow : Window
 
         void Walk(PropertyNode n)
         {
-            if (!string.IsNullOrWhiteSpace(n.Variable))
-                terms.Add(new Term { Name = n.QualifiedName, Variable = n.Variable, Type = n.Type });
+            // A property with states contributes nothing itself - its states carry the
+            // value that distinguishes them. A property with no states is a term in itself.
+            if (n.Children.Count == 0 && !string.IsNullOrWhiteSpace(n.EffectiveVariable))
+            {
+                terms.Add(new Term
+                {
+                    Name = n.QualifiedName,
+                    Variable = n.EffectiveVariable,
+                    Type = n.EffectiveType,
+                    Value = string.IsNullOrWhiteSpace(n.Value) ? null : n.Value
+                });
+            }
             foreach (var c in n.Children) Walk(c);
         }
 
@@ -334,43 +504,93 @@ public partial class MainWindow : Window
 
     // ---------------------------------------------------------------- translate
 
+    /// <summary>
+    /// Translates EVERY scenario of the selected equipment, one after another, and keeps
+    /// each result on its scenario. Clicking a scenario afterwards shows its own code,
+    /// so the whole profile can be reviewed without re-running anything.
+    /// </summary>
     private async void Translate_Click(object sender, RoutedEventArgs e)
     {
-        var pack = BuildContextPack();
-
-        if (string.IsNullOrWhiteSpace(pack.Scenario))
+        var todo = _scenarios.Where(s => !string.IsNullOrWhiteSpace(s.Text)).ToList();
+        if (todo.Count == 0)
         {
-            Status("Nothing to translate - the scenario is empty.");
+            Status("Nothing to translate - every scenario is empty.");
             return;
         }
 
-        ContextBox.Text = PromptBuilder.ToJson(pack);
-
+        var settings = CurrentSettings();
         SetBusy(true);
-        ResultStatus.Text = "Generating...";
-        StartRunClock();
-        Status($"Calling {ModelBox.Text}...");
-
         _cts = new CancellationTokenSource();
+
+        var done = 0; var failed = 0; var flagged = 0;
+        var batch = System.Diagnostics.Stopwatch.StartNew();
+
         try
         {
-            var outcome = await _translator.TranslateAsync(pack, CurrentSettings(), _cts.Token);
-            _lastOutcome = outcome;
-            Render(outcome);
-        }
-        catch (Exception ex)
-        {
-            ResultStatus.Text = "Failed";
-            Status($"Unexpected error: {ex.Message}");
+            foreach (var s in todo)
+            {
+                if (_cts.IsCancellationRequested) break;
+
+                done++;
+                ScenarioList.SelectedItem = s;          // follow along in the list
+                ResultStatus.Text = $"Generating {done} of {todo.Count}...";
+                Status($"[{done}/{todo.Count}] {s.Name} - calling {settings.Model}...");
+                StartRunClock();
+
+                TranslationOutcome outcome;
+                try
+                {
+                    outcome = await _translator.TranslateAsync(BuildContextPack(s), settings, _cts.Token);
+                }
+                catch (Exception ex)
+                {
+                    Status($"[{done}/{todo.Count}] {s.Name} - unexpected error: {ex.Message}");
+                    break;
+                }
+                finally
+                {
+                    StopRunClock();
+                }
+
+                s.Outcome = outcome;
+                if (!outcome.Ok) failed++;
+                else if (outcome.UnknownIdentifiers.Count > 0) flagged++;
+
+                ShowScenarioResult(s);                  // render as each one lands
+            }
         }
         finally
         {
-            StopRunClock();
+            batch.Stop();
             _cts?.Dispose();
             _cts = null;
             SetBusy(false);
-            _ = RefreshUsageAsync();   // spend changed - show it
+            _ = RefreshUsageAsync();
         }
+
+        var ok = done - failed - flagged;
+        Status($"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  " +
+               $"{ok} clean, {flagged} with unknown identifiers, {failed} failed  |  " +
+               "click a scenario to see its code.");
+    }
+
+    /// <summary>Shows a scenario's stored result, or clears the panel if it has none.</summary>
+    private void ShowScenarioResult(Scenario s)
+    {
+        ContextBox.Text = PromptBuilder.ToJson(BuildContextPack(s));
+
+        if (s.Outcome is null)
+        {
+            SclBox.Text = ExplanationBox.Text = RawBox.Text = RequestBox.Text = "";
+            UnknownBox.Text = WarningsBox.Text = "-";
+            ResultStatus.Text = "Not translated yet";
+            MetricsPanel.Visibility = Visibility.Collapsed;
+            _lastOutcome = null;
+            return;
+        }
+
+        _lastOutcome = s.Outcome;
+        Render(s.Outcome);
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
@@ -382,25 +602,34 @@ public partial class MainWindow : Window
         Cursor = busy ? System.Windows.Input.Cursors.Wait : null;
     }
 
-    private ContextPack BuildContextPack() => new()
+    /// <summary>
+    /// The context pack for one scenario. Defaults to the selected one, but the batch
+    /// translator passes each in turn, so it must not read the editor.
+    /// </summary>
+    private ContextPack BuildContextPack(Scenario? target = null)
     {
-        Equipment = "Motor",
-        TargetLanguage = "SCL",
-        Scenario = ScenarioText.Text,
-        // Every other scenario goes along, so references like "auto run ready" can be
-        // resolved and flattened instead of guessed at.
-        ReferencedScenarios = _scenarios
-            .Where(s => !ReferenceEquals(s, ScenarioList.SelectedItem)
-                        && !string.IsNullOrWhiteSpace(s.Text))
-            .Select(s => new ScenarioRef { Name = s.Name, Content = s.Text })
-            .ToList(),
-        Terms = CollectTerms(),
-        Timers = CollectTerms()
-            .Where(t => string.Equals(t.Type, "TON", StringComparison.OrdinalIgnoreCase))
-            .Select(t => t.Variable).Distinct().ToList(),
-        Functions = new List<string> { "PLC Timer", "Time Recorder" },
-        Conventions = "Siemens TIA Portal SCL. Comment each block with the sentence it implements."
-    };
+        var s = target ?? ScenarioList.SelectedItem as Scenario;
+        var terms = CollectTerms();
+
+        return new ContextPack
+        {
+            Equipment = _equipmentId == 1 ? "Motor" : "Valve",
+            TargetLanguage = "SCL",
+            Scenario = s?.Text ?? "",
+            // Every other scenario goes along, so references like "auto run ready" can be
+            // resolved and flattened instead of guessed at.
+            ReferencedScenarios = _scenarios
+                .Where(o => !ReferenceEquals(o, s) && !string.IsNullOrWhiteSpace(o.Text))
+                .Select(o => new ScenarioRef { Name = o.Name, Content = o.Text })
+                .ToList(),
+            Terms = terms,
+            Timers = terms
+                .Where(t => string.Equals(t.Type, "TON", StringComparison.OrdinalIgnoreCase))
+                .Select(t => t.Variable).Distinct().ToList(),
+            Functions = new List<string> { "HMI", "PLC", "Delay Timer", "Time Recorder" },
+            Conventions = "Siemens TIA Portal SCL. Comment each block with the sentence it implements."
+        };
+    }
 
     /// <summary>Shows the numbers a model is judged on, where they cannot scroll off screen.</summary>
     private void ShowMetrics(TranslationOutcome o)
@@ -543,119 +772,176 @@ public partial class MainWindow : Window
 
     private void BuildReferenceTree()
     {
-        var profile = new TreeViewItem { Header = "Lipico", IsExpanded = true };
+        var profile = new TreeViewItem { Header = "Lipico", IsExpanded = true };   // ProfileId 1
         var equip = new TreeViewItem { Header = "Equipment Type", IsExpanded = true };
-        equip.Items.Add(new TreeViewItem { Header = "Motor", IsSelected = true });
-        equip.Items.Add(new TreeViewItem { Header = "Valve" });
+
+        var motor = new TreeViewItem { Header = "Motor", Tag = 1, IsSelected = true };
+        var valve = new TreeViewItem { Header = "Valve", Tag = 2 };
+        motor.Selected += Equipment_Selected;
+        valve.Selected += Equipment_Selected;
+        equip.Items.Add(motor);
+        equip.Items.Add(valve);
         profile.Items.Add(equip);
 
         var fn = new TreeViewItem { Header = "Function", IsExpanded = true };
-        fn.Items.Add(new TreeViewItem { Header = "Run Fail Timer" });
-        fn.Items.Add(new TreeViewItem { Header = "Runtime Recorder" });
+        fn.Items.Add(new TreeViewItem { Header = "HMI" });
+        fn.Items.Add(new TreeViewItem { Header = "PLC" });
+        fn.Items.Add(new TreeViewItem { Header = "Delay Timer" });
+        fn.Items.Add(new TreeViewItem { Header = "Time Recorder" });
 
         ReferenceTree.Items.Add(profile);
         ReferenceTree.Items.Add(fn);
         ReferenceTree.Items.Add(new TreeViewItem { Header = "Tags" });
     }
 
+    /// <summary>Picking equipment in the tree shows only that equipment's scenarios.</summary>
+    private void Equipment_Selected(object sender, RoutedEventArgs e)
+    {
+        if (sender is not TreeViewItem { Tag: int id }) return;
+        e.Handled = true;
+        if (_equipmentId == id) return;
+        _equipmentId = id;
+        ShowScenariosForEquipment();
+    }
+
+    private void ShowScenariosForEquipment()
+    {
+        _scenarios.Clear();
+        foreach (var s in _allScenarios.Where(s => s.EquipmentId == _equipmentId))
+            _scenarios.Add(new Scenario { Name = s.Name, Text = s.Text });
+
+        if (_scenarios.Count > 0) ScenarioList.SelectedIndex = 0;
+        else { ScenarioPlainText = ""; }
+
+        var eq = _equipmentId == 1 ? "Motor" : "Valve";
+        Status($"{eq}: {_scenarios.Count} scenario{(_scenarios.Count == 1 ? "" : "s")} loaded.");
+    }
+
+    /// <summary>
+    /// The Lipico profile (ProfileId 1) exactly as it stands in the database:
+    /// Statement, StatementProperty and PropertyTerm, joined.
+    ///
+    /// The important shape: PlcVariable belongs to the PROPERTY, PlcValue to the STATE.
+    /// Operation Mode is blnMA, and Auto is blnMA = 0 while Manual is blnMA = 1 - two
+    /// values of one variable, not two variables.
+    /// </summary>
     private void LoadSample()
     {
-        // The Motor profile as it stands in the real app. These scenarios reference each
-        // other by name, which is what the flattening rules in the system prompt act on.
-        _scenarios.Clear();
-        void S(string name, string text) => _scenarios.Add(new Scenario { Name = name, Text = text });
+        // ---- Statement table -------------------------------------------------
+        _allScenarios.Clear();
+        void S(int equipmentId, string name, string text) =>
+            _allScenarios.Add((equipmentId, name, text));
 
-        S("Operation",
+        // EquipmentId 1 - Motor
+        S(1, "Operation",
             "When auto run ready or manual run ready and no faults, then will command run.");
 
-        S("System Handle",
+        S(1, "System Handle",
             "When operation mode in Auto, the Manual Start/Stop position will according with " +
             "Operation Signal Run/Stop.\n\n" +
             "During PLC Initialize or MCC Trip On, the Manual Operation position will be in Stop.\n\n" +
             "During PLC Initialize, Run Fail Timer's delay time Set to 10 seconds.\n\n" +
             "Operation Signal Run time will be recorded by runtime recorder.");
 
-        S("Run Failed",
+        S(1, "Run Failed",
             "When Operation signal Run not received after run fail timer elapsed, turn on Run Fail alarm, " +
-            "turn on Run Fail Buzzer once. When HMI Acknowledge, turn off Run Fail Buzzer.");
+            "turn on Run Fail Buzzer once.\n\n" +
+            "When HMI Acknowledge, turn off Run Fail Buzzer.");
 
-        S("Auto run ready",
+        S(1, "Auto run ready",
             "When operation mode in Auto and Sequence Auto is fulfilled.");
 
-        S("Manual run ready",
+        S(1, "Manual run ready",
             "When operation mode in Manual and manual started.");
 
-        S("Faults",
+        S(1, "Faults",
             "When trip alarm is on or run fail alarm is on.");
 
-        S("Trip",
-            "When Trip Signal is On, turn on Trip Alarm, turn on Trip Buzzer once. " +
+        S(1, "Trip",
+            "When Trip Signal is On, turn on Trip Alarm, turn on Trip Buzzer once.\n\n" +
             "When HMI Acknowledge, turn off Trip Buzzer.");
 
-        ScenarioList.SelectedIndex = 0;
+        // EquipmentId 2 - Valve
+        S(2, "Operation",
+            "When Manual Run Fulfilled or Auto Run Fulfilled, without trip Alarm, then PLC command Run.\n\n" +
+            "During motor Run, the running time will be recorded by timer recorder.");
 
-        // The Properties tree of the Motor profile: a property, then its states.
+        S(2, "System Handle",
+            "When in Auto Mode, Manual Operation position will change and retain according with Input Run Signal.\n\n" +
+            "During PLC Initializing or MCC Trip On, the Manual Operation position will be in Stop.\n\n" +
+            "During PLC Initializing, Run Fail Alarm Timer Setpoint assigned value 10 seconds.\n\n" +
+            "During PLC Initializing, Trip Alarm Timer Setpoint assigned value 3 seconds.\n\n" +
+            "Trip Alarm Timer will start counting when have Trip Feedback On. If the Trip Alarm Timer elapsed, " +
+            "Trip Alarm will turn on. Trip Alarm will off and Trip Alarm Timer will be reset when Trip Feedback is off.\n\n" +
+            "When Trip Alarm On, Trip Buzzer will turn on and retain. Trip Buzzer only can be reset by operator.");
+
+        ShowScenariosForEquipment();
+
+        // ---- StatementProperty + PropertyTerm --------------------------------
         _properties.Clear();
 
-        PropertyNode P(string name, string variable = "", string type = "")
+        PropertyNode P(string name, string variable, string type, string plcFunction)
         {
             var n = new PropertyNode { Name = name, Variable = variable, Type = type };
             _properties.Add(n);
             return n;
         }
-        void St(PropertyNode parent, string name, string variable, string type = "BOOL") =>
-            parent.Children.Add(new PropertyNode
-            { Name = name, Variable = variable, Type = type, Parent = parent });
+        void St(PropertyNode parent, string name, string value) =>
+            parent.Children.Add(new PropertyNode { Name = name, Value = value, Parent = parent });
 
-        var opMode = P("Operation Mode");
-        St(opMode, "Auto",   "OpMode_Auto");
-        St(opMode, "Manual", "OpMode_Manual");
+        var opMode = P("Operation Mode", "blnMA", "INT", "HMI");
+        St(opMode, "Auto", "0");
+        St(opMode, "Manual", "1");
 
-        var manual = P("Manual");
-        St(manual, "Start", "Manual_Start");
-        St(manual, "Stop",  "Manual_Stop");
+        var mccTrip = P("MCC Trip", "New Instance", "BOOL", "HMI");
+        St(mccTrip, "Trip Off", "0");
+        St(mccTrip, "Trip On", "0");          // see Data Issues: both are 0 in the source
 
-        var tripSig = P("Trip Signal");
-        St(tripSig, "On",  "TripSignal");
-        St(tripSig, "Off", "TripSignal_Off");
+        P("VOP", "New Instance", "BOOL", "HMI");
 
-        var opSig = P("Operation Signal");
-        St(opSig, "Run",  "OpSignal_Run");
-        St(opSig, "Stop", "OpSignal_Stop");
+        var manual = P("Manual", "blnMC", "INT", "HMI");
+        St(manual, "Start", "1");
+        St(manual, "Stop", "0");
 
-        var cmd = P("Command");
-        St(cmd, "Run",  "Cmd_Run");
-        St(cmd, "Stop", "Cmd_Stop");
+        var tripSig = P("Trip Signal", "blnTRP", "INT", "PLC");
+        St(tripSig, "On", "1");
+        St(tripSig, "Off", "0");
 
-        P("Run Fail Timer",   "RunFailTimer",    "TON");
-        P("Runtime recorder", "RuntimeRecorder", "TIME");
+        var opSig = P("Operation Signal", "blnRUN", "INT", "PLC");
+        St(opSig, "Run", "1");
+        St(opSig, "Stop", "0");
 
-        var tripAlarm = P("Trip Alarm");
-        St(tripAlarm, "On",  "TripAlarm");
-        St(tripAlarm, "Off", "TripAlarm_Off");
+        var cmd = P("Command", "blnOut", "INT", "PLC");
+        St(cmd, "Run", "1");
+        St(cmd, "Stop", "0");
 
-        var runFailAlarm = P("Run Fail Alarm");
-        St(runFailAlarm, "On",  "RunFailAlarm");
-        St(runFailAlarm, "Off", "RunFailAlarm_Off");
+        P("PLC Initialize", "PLCInit", "BOOL", "PLC");
+        P("Run Fail Timer", "tmrRFAL", "TON", "Delay Timer");
+        P("Runtime recorder", "RFTimer", "TIME", "Time Recorder");
 
-        var seqAuto = P("Sequence Auto");
-        St(seqAuto, "Fulfilled",   "SeqAuto_Fulfilled");
-        St(seqAuto, "Unfulfilled", "SeqAuto_Unfulfilled");
+        var tripAlarm = P("Trip Alarm", "New Instance", "INT", "HMI");
+        St(tripAlarm, "On", "1");
+        St(tripAlarm, "Off", "0");
 
-        var runFailBuzzer = P("Run Fail Buzzer");
-        St(runFailBuzzer, "On",  "RunFailBuzzer");
-        St(runFailBuzzer, "Off", "RunFailBuzzer_Off");
+        var runFailAlarm = P("Run Fail Alarm", "New Instance", "INT", "HMI");
+        St(runFailAlarm, "On", "1");
+        St(runFailAlarm, "Off", "0");
 
-        var tripBuzzer = P("Trip Buzzer");
-        St(tripBuzzer, "On",  "TripBuzzer");
-        St(tripBuzzer, "Off", "TripBuzzer_Off");
+        var seqAuto = P("Sequence Auto", "blnAUT", "INT", "HMI");
+        St(seqAuto, "Fulfilled", "1");
+        St(seqAuto, "Unfulfilled", "0");
 
-        P("HMI Acknowledge", "HMI_Ack",     "BOOL");
-        P("PLC Initialize",  "Sys_plsInit", "BOOL");
-        P("MCC Trip",        "MCC_Trip",    "BOOL");
+        var runFailBuzzer = P("Run Fail Buzzer", "New Instance", "INT", "HMI");
+        St(runFailBuzzer, "On", "1");
+        St(runFailBuzzer, "Off", "0");
 
-        Status("Motor profile loaded - 7 scenarios. Pick one, then click Request AI Translator.");
+        var tripBuzzer = P("Trip Buzzer", "New Instance", "INT", "HMI");
+        St(tripBuzzer, "On", "1");
+        St(tripBuzzer, "Off", "0");
+
+        P("HMI Acknowledge", "SysAck", "BOOL", "HMI");
     }
+
 
     protected override void OnClosed(EventArgs e)
     {
@@ -664,6 +950,10 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 }
+
+
+
+
 
 
 
