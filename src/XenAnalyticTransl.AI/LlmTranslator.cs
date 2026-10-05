@@ -175,14 +175,6 @@ public static class ProviderPresets
 				BaseUrl = "https://openrouter.ai/api/v1",
 				Model = "openai/gpt-5.6-luna", ApiKeyEnvVar = "OPENROUTER_API_KEY",
 				InputUsdPerM = 0.2m, OutputUsdPerM = 1.2m},
-
-        // Hugging Face Inference Providers - an OpenAI-compatible router over Together,
-        new() { ProviderName = "HuggingFace - Llama 3.1 8B Instruct",
-		        BaseUrl = "https://router.huggingface.co/v1",
-		        Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
-		        InputUsdPerM = 0m, OutputUsdPerM = 0m },
-
-
 	};
 }
 
