@@ -730,7 +730,16 @@ public partial class MainWindow : Window
         _lastOutcome = null;
         ResultStatus.Text = "Cleared";
         MetricsPanel.Visibility = Visibility.Collapsed;
-        Status("Result cleared. Scenario and terms are unchanged.");
+
+        // Clearing the panes alone would leave each scenario still holding its stored
+        // result, so the tick/!/cross markers would stay beside the names and clicking
+        // a scenario would bring the "cleared" code straight back. Drop the outcomes too.
+        var cleared = _scenarios.Count(s => s.Outcome is not null);
+        foreach (var s in _scenarios) s.Outcome = null;
+
+        Status(cleared == 0
+            ? "Nothing to clear. Scenario and terms are unchanged."
+            : $"Cleared {cleared} scenario result{(cleared == 1 ? "" : "s")}. Scenario and terms are unchanged.");
     }
 
     private void SaveRun_Click(object sender, RoutedEventArgs e)
