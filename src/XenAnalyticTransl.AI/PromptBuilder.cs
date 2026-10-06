@@ -190,14 +190,18 @@ public static class PromptBuilder
         Rules for the fields:
         - "code" holds executable logic only. Do NOT emit a declaration block
           (VAR ... END_VAR) - the project already declares these tags.
-        - Comment each block with the sentence of the Scenario it implements.
+        - Comment each block with a SHORT label, at most 8 words. Label what the block
+          does - "// Auto mode: follow run signal" - do not copy the Scenario sentence
+          into the code. The full sentence belongs in "explanation".
         - A comment states WHAT a block does, in one line. Never write your own
           deliberation into the code: no "let me check", no "wait", no weighing of
           alternatives, no questions to yourself, no notes about what you decided and
           why. Reasoning belongs in "explanation"; doubt belongs in "warnings". A reader
-          of "code" should see SCL and the scenario sentences, nothing else.
-        - If a variable cannot be resolved, do not argue about it in the code. Write the
-          logic you can, leave out what you cannot, and say so in "warnings".
+          of "code" should see SCL and short labels, nothing else.
+        - If a variable cannot be resolved, emit exactly ONE line for that block:
+          "// TODO: <names> - no PLC tag", then move on. Nothing else. Do not restate the
+          requirement, do not explain what is missing, do not write "see warnings".
+          The explanation goes in "warnings" and "explanation", never in "code".
         - Prefer several small IF blocks in Scenario order over one nested condition.
         - "variables_used" must list every identifier the code references. It is checked
           against the tag table, so an invented name will be caught.
