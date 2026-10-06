@@ -123,15 +123,12 @@ public static class ProviderPresets
                 DisableReasoning = false, MaxTokens = 32000 },
 
         // Gemini through the same OpenRouter key. Gemini accepts temperature, so that
-        // stays on; reasoning is disabled by default like Qwen Flash. If it returns a 400
-        // naming the reasoning field, set DisableReasoning = false here.
-        // Reasoning is mandatory on this endpoint - it 400s if you try to disable it,
-        // like Qwen Max. So leave it on and give the budget room for thinking + answer.
-        new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0.30m, OutputUsdPerM = 2.50m,
-                DisableReasoning = false, MaxTokens = 10000 },
+        // Need payment [soon deleted]
+        //new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0.30m, OutputUsdPerM = 2.50m,
+        //        DisableReasoning = false, MaxTokens = 10000 },
 
         new() { ProviderName = "OpenRouter - Gemini 3.1 Flash Lite (cheapest)",
                 BaseUrl = "https://openrouter.ai/api/v1",
@@ -164,11 +161,12 @@ public static class ProviderPresets
                 ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
         // Claude through the SAME OpenRouter key - no Anthropic account needed.
-        new() { ProviderName = "OpenRouter - Claude Sonnet 5 (needs credit)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "anthropic/claude-sonnet-5", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 2m, OutputUsdPerM = 10m,
-                SendTemperature = false },
+        // ERROR in running cpde. insufficient credit. [NEED TO REMOVE SOON]
+        //new() { ProviderName = "OpenRouter - Claude Sonnet 5 (needs credit)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "anthropic/claude-sonnet-5", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 2m, OutputUsdPerM = 10m,
+        //        SendTemperature = false },
 
         // GPT through the SAME OpenRouter key - no Anthropic account needed.
         new() { ProviderName = "OpenRouter - GPT 5.6 Luna (needs credit)",
