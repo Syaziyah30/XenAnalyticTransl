@@ -635,7 +635,8 @@ public partial class MainWindow : Window
                 .Where(t => string.Equals(t.Type, "TON", StringComparison.OrdinalIgnoreCase))
                 .Select(t => t.Variable).Distinct().ToList(),
             Functions = new List<string> { "HMI", "PLC", "Delay Timer", "Time Recorder" },
-            Conventions = "Siemens TIA Portal SCL. Comment each block with the sentence it implements."
+            Conventions = "Siemens TIA Portal SCL. Label each block with a short comment, " +
+                          "at most 8 words. Do not copy the scenario sentence into the code."
         };
     }
 
@@ -865,10 +866,10 @@ public partial class MainWindow : Window
             "turn on Run Fail Buzzer once.\n\n" +
             "When HMI Acknowledge, turn off Run Fail Buzzer.");
 
-        S(1, "Auto run ready",
+        S(1, "Auto Run Ready",
             "When operation mode in Auto and Sequence Auto is fulfilled.");
 
-        S(1, "Manual run ready",
+        S(1, "Manual Run Ready",
             "When operation mode in Manual and manual started.");
 
         S(1, "Faults",
@@ -912,7 +913,7 @@ public partial class MainWindow : Window
 
         var mccTrip = P("MCC Trip", "New Instance", "BOOL", "HMI");
         St(mccTrip, "Trip Off", "0");
-        St(mccTrip, "Trip On", "0");          // see Data Issues: both are 0 in the source
+        St(mccTrip, "Trip On", "1");
 
         P("VOP", "New Instance", "BOOL", "HMI");
 

@@ -28,8 +28,8 @@ var profile = new (int Eq, string Name, string Text)[]
         "When Operation signal Run not received after run fail timer elapsed, turn on Run Fail alarm, " +
         "turn on Run Fail Buzzer once.\n\nWhen HMI Acknowledge, turn off Run Fail Buzzer."),
 
-    (1, "Auto run ready",   "When operation mode in Auto and Sequence Auto is fulfilled."),
-    (1, "Manual run ready", "When operation mode in Manual and manual started."),
+    (1, "Auto Run Ready",   "When operation mode in Auto and Sequence Auto is fulfilled."),
+    (1, "Manual Run Ready", "When operation mode in Manual and manual started."),
     (1, "Faults",           "When trip alarm is on or run fail alarm is on."),
 
     (1, "Trip",
@@ -104,7 +104,7 @@ void Plain(string prop, string variable, string type) =>
 State("Operation Mode", "blnMA", "INT", "Auto", "0");
 State("Operation Mode", "blnMA", "INT", "Manual", "1");
 State("MCC Trip", "New Instance", "BOOL", "Trip Off", "0");
-State("MCC Trip", "New Instance", "BOOL", "Trip On", "0");
+State("MCC Trip", "New Instance", "BOOL", "Trip On", "1");
 Plain("VOP", "New Instance", "BOOL");
 State("Manual", "blnMC", "INT", "Start", "1");
 State("Manual", "blnMC", "INT", "Stop", "0");

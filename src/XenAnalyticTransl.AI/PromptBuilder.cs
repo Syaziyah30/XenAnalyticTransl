@@ -198,10 +198,33 @@ public static class PromptBuilder
           alternatives, no questions to yourself, no notes about what you decided and
           why. Reasoning belongs in "explanation"; doubt belongs in "warnings". A reader
           of "code" should see SCL and short labels, nothing else.
+        - Some Scenarios DEFINE A CONDITION that other Scenarios consume by name. The
+          Scenario "Auto run ready" is used inside "Operation" as a phrase, not as a
+          stored bit. If a Scenario defines a condition and the tag table holds no
+          variable for its result, do NOT invent one. Emit the boolean expression by
+          itself, as a fragment for the referencing Scenario to inline:
+              // Auto run ready
+              (blnMA = 0) AND (blnAUT = 1)
+          Never write "blnAutoRunReady := ...". A name that is not in the tag table is
+          not yours to create. "variables_used" then lists only the real tags the
+          expression reads.
+        - When a Scenario REFERENCES another by name, substitute that Scenario's
+          condition inline, parenthesised. "Operation" becomes
+          "IF ((auto run ready) OR (manual run ready)) AND NOT (faults) THEN ...".
         - If a variable cannot be resolved, emit exactly ONE line for that block:
           "// TODO: <names> - no PLC tag", then move on. Nothing else. Do not restate the
           requirement, do not explain what is missing, do not write "see warnings".
           The explanation goes in "warnings" and "explanation", never in "code".
+        - NEVER SUBSTITUTE A DIFFERENT TAG FOR A MISSING ONE. Each Term maps to exactly
+          one variable. If the Scenario names "MCC Trip" and MCC Trip has no usable
+          variable, you may NOT reach for "Trip Signal" (blnTRP) because it sounds
+          similar or is the closest available. They are different inputs on the real
+          plant and swapping them produces code that passes validation and controls the
+          wrong signal - the most dangerous failure this system can produce. A missing
+          tag is always "// TODO: <term> - no PLC tag", never a nearby tag.
+        - Two Terms sharing one variable name (several map to "New Instance") does NOT
+          make them the same signal, and does not let you pick one for the other. Treat
+          each as unresolved, TODO it, and say so in "warnings".
         - Prefer several small IF blocks in Scenario order over one nested condition.
         - "variables_used" must list every identifier the code references. It is checked
           against the tag table, so an invented name will be caught.
