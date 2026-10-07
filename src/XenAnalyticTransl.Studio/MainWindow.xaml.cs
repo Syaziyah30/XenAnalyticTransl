@@ -151,6 +151,13 @@ public partial class MainWindow : Window
     };
     private readonly System.Diagnostics.Stopwatch _runClock = new();
 
+    /// <summary>
+    /// Elapsed time for the WHOLE batch. The metrics bar reports this rather than the
+    /// selected scenario's own time, so browsing results after a run does not keep
+    /// changing the number being compared between models. 0 means no batch has finished.
+    /// </summary>
+    private long _batchMs;
+
     // Re-colouring on every keystroke fights the caret; wait for a pause.
     private readonly System.Windows.Threading.DispatcherTimer _recolour = new()
     { Interval = TimeSpan.FromMilliseconds(400) };
@@ -525,6 +532,7 @@ public partial class MainWindow : Window
 
         var done = 0; var failed = 0; var flagged = 0;
         var batch = System.Diagnostics.Stopwatch.StartNew();
+        _batchMs = 0;           // fall back to per-scenario time until the batch lands
 
         try
         {
@@ -563,9 +571,16 @@ public partial class MainWindow : Window
         finally
         {
             batch.Stop();
+            _batchMs = (long)batch.Elapsed.TotalMilliseconds;
             _cts?.Dispose();
             _cts = null;
             SetBusy(false);
+
+            // Repaint the bar so it shows the batch total instead of whichever
+            // scenario happened to finish last.
+            if (ScenarioList.SelectedItem is Scenario sel && sel.Outcome is not null)
+                ShowMetrics(sel.Outcome);
+
             _ = RefreshUsageAsync();
         }
 
@@ -644,7 +659,13 @@ public partial class MainWindow : Window
     private void ShowMetrics(TranslationOutcome o)
     {
         MetricsPanel.Visibility = Visibility.Visible;
-        TimeText.Text = $"{o.ElapsedMs / 1000.0:0.0} s";
+
+        // Whole-run time, held steady while the user clicks through the results.
+        var showMs = _batchMs > 0 ? _batchMs : o.ElapsedMs;
+        TimeText.Text = $"{showMs / 1000.0:0.0} s";
+        TimeText.ToolTip = _batchMs > 0
+            ? $"Total for the whole run. This scenario took {o.ElapsedMs / 1000.0:0.0} s."
+            : "Time for this scenario.";
 
         if (o.Ok)
         {
@@ -660,8 +681,9 @@ public partial class MainWindow : Window
             : "";
         MetricsText.Text = $"{model}{tokens}";
 
-        // Slow runs are worth noticing when comparing models.
-        TimeText.Foreground = o.ElapsedMs > 30000
+        // Slow runs are worth noticing when comparing models. A whole batch is allowed
+        // longer than a single scenario before it counts as slow.
+        TimeText.Foreground = showMs > (_batchMs > 0 ? 60000 : 30000)
             ? System.Windows.Media.Brushes.Firebrick
             : new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x12, 0x44, 0x7F));
@@ -729,6 +751,7 @@ public partial class MainWindow : Window
         WarningsBox.Text = "-";
 
         _lastOutcome = null;
+        _batchMs = 0;
         ResultStatus.Text = "Cleared";
         MetricsPanel.Visibility = Visibility.Collapsed;
 
