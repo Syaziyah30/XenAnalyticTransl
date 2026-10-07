@@ -760,11 +760,19 @@ public partial class MainWindow : Window
     // tabs. Each hit knows how to reveal itself - select a scenario, expand and
     // highlight a tree node, or switch tab and select the characters.
 
-    /// <summary>One match, with the means to bring it on screen.</summary>
-    private sealed record Hit(string Where, Action Reveal);
+    /// <summary>
+    /// One match, with the means to bring it on screen. Box and Start are set only for
+    /// hits inside a result tab, so the highlighter knows which rectangle is current.
+    /// </summary>
+    private sealed record Hit(string Where, Action Reveal, TextBox? Box = null, int Start = -1,
+                              Scenario? InScenarioText = null);
 
     private readonly List<Hit> _hits = new();
     private int _hitAt = -1;
+
+    /// <summary>Every result box that find paints into.</summary>
+    private TextBox[] SearchableBoxes =>
+        [SclBox, ExplanationBox, ContextBox, RequestBox, RawBox];
 
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -801,6 +809,8 @@ public partial class MainWindow : Window
         _hitAt = -1;
         FindWhere.Text = "";
         FindCount.Text = "";
+        FindHighlighter.ClearAll(SearchableBoxes);
+        FindHighlighter.Clear(ScenarioText);
     }
 
     private void FindBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -858,9 +868,21 @@ public partial class MainWindow : Window
                 _hits.Add(new Hit($"Scenario: {scenario.Name}",
                     () => ScenarioList.SelectedItem = scenario));
 
-            if (Has(scenario.Text))
-                _hits.Add(new Hit($"Text of {scenario.Name}",
-                    () => ScenarioList.SelectedItem = scenario));
+            // One hit per occurrence, so stepping walks the text rather than the list.
+            var t = scenario.Text;
+            var k = t.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+            var nth = 0;
+            while (k >= 0)
+            {
+                nth++;
+                var label = $"Scenario text: {scenario.Name}" + (nth > 1 ? $" ({nth})" : "");
+                var hitStart = k;
+                _hits.Add(new Hit(label, () =>
+                {
+                    ScenarioList.SelectedItem = scenario;
+                }, null, hitStart, scenario));
+                k = t.IndexOf(term, k + 1, StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         // ---- 2. Properties and their states, at any depth ----
@@ -912,12 +934,64 @@ public partial class MainWindow : Window
                     ResultTabs.SelectedIndex = tab;
                     box.Select(at, term.Length);
                     box.ScrollToLine(Math.Max(0, box.GetLineIndexFromCharacterIndex(at) - 2));
-                }));
+                }, box, at));
                 i = text.IndexOf(term, i + 1, StringComparison.OrdinalIgnoreCase);
             }
         }
 
+        PaintMatches();
         ShowFindStatus();
+    }
+
+    /// <summary>
+    /// Repaints the match rectangles in every result box. A TextBox can only select one
+    /// range, so showing all matches at once needs the adorner layer.
+    /// </summary>
+    private void PaintMatches()
+    {
+        var term = FindBox.Text;
+        if (FindBar.Visibility != Visibility.Visible || term.Length == 0)
+        {
+            FindHighlighter.ClearAll(SearchableBoxes);
+            FindHighlighter.Clear(ScenarioText);
+            return;
+        }
+
+        var currentHit = _hitAt >= 0 && _hitAt < _hits.Count ? _hits[_hitAt] : null;
+
+        // ---- the scenario editor ----
+        // Offsets are taken from the live document, not from Scenario.Text, because the
+        // editor's run walk is what the adorner resolves pointers against.
+        var docText = RichFindAdorner.RunText(ScenarioText.Document);
+        var scenarioStarts = new List<int>();
+        var j = docText.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+        while (j >= 0)
+        {
+            scenarioStarts.Add(j);
+            j = docText.IndexOf(term, j + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var shown = ScenarioList.SelectedItem as Scenario;
+        var scenarioCurrent =
+            currentHit?.InScenarioText is not null && ReferenceEquals(currentHit.InScenarioText, shown)
+                ? scenarioStarts.IndexOf(currentHit.Start)
+                : -1;
+
+        FindHighlighter.Show(ScenarioText, scenarioStarts, term.Length, scenarioCurrent);
+
+        // ---- the result tabs ----
+        foreach (var box in SearchableBoxes)
+        {
+            var starts = _hits.Where(h => ReferenceEquals(h.Box, box))
+                              .Select(h => h.Start).ToList();
+
+            // -1 when the selected hit lives in another box or another panel.
+            var current = currentHit is not null && ReferenceEquals(currentHit.Box, box)
+                ? starts.IndexOf(currentHit.Start)
+                : -1;
+
+            FindHighlighter.Show(box, starts, term.Length, current);
+        }
     }
 
     private void Step(int delta)
@@ -934,7 +1008,12 @@ public partial class MainWindow : Window
         // Reveal can change the tab or the selected scenario, which moves focus.
         // Put it back in the find box so Enter keeps stepping.
         _hits[index].Reveal();
+        PaintMatches();                 // re-tint: the current match changes colour
         ShowFindStatus();
+
+        // Selecting a scenario rebuilds the editor's document; repaint once that lands.
+        Dispatcher.BeginInvoke(new Action(PaintMatches),
+                               System.Windows.Threading.DispatcherPriority.Loaded);
         Dispatcher.BeginInvoke(new Action(() => FindBox.Focus()),
                                System.Windows.Threading.DispatcherPriority.Input);
     }
