@@ -106,12 +106,20 @@ public static class ProviderPresets
                 Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
                 InputUsdPerM = 0.15m, OutputUsdPerM = 0.47m },
 
-        // Free tier runs on a shared pool and returns 429 whenever it is busy.
-        // Fine when it works; not something to depend on for a test session.
-        new() { ProviderName = "OpenRouter - Qwen3.8 27B (free, often rate-limited)",
+        // Routes to whatever is zero-cost right now. Named free models come and go -
+        // qwen3.8-27b:free was withdrawn mid-project and started 404ing - so prefer the
+        // router over any single :free slug. Capped around 50 requests a day, which is
+        // roughly seven full seven-scenario runs.
+        new() { ProviderName = "OpenRouter - Free (auto-router)",
                 BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                Model = "openrouter/free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
                 InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        // The paid 27B. The :free variant of this slug no longer exists.
+        new() { ProviderName = "OpenRouter - Qwen3.8 27B (paid)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.20m, OutputUsdPerM = 0.60m },
 
         // Max refuses `reasoning: {enabled:false}` with a 400 - reasoning is mandatory on
         // that endpoint. So leave it on and give the budget room for thinking AND answer.
