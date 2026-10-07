@@ -62,6 +62,23 @@ public sealed class PropertyNode : System.ComponentModel.INotifyPropertyChanged
     public ObservableCollection<PropertyNode> Children { get; } = new();
     public PropertyNode? Parent { get; set; }
 
+    private bool _isExpanded;
+    private bool _isSelected;
+
+    /// <summary>Bound two-way to the TreeViewItem so find can open a node's parents.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set { _isExpanded = value; Changed(nameof(IsExpanded)); }
+    }
+
+    /// <summary>Bound two-way to the TreeViewItem so find can highlight a node.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set { _isSelected = value; Changed(nameof(IsSelected)); }
+    }
+
     /// <summary>
     /// PlcValue. In the real data the variable belongs to the PROPERTY and the value to
     /// the STATE: Operation Mode is blnMA, with Auto = 0 and Manual = 1. So a state is a
@@ -734,6 +751,200 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(SclBox.Text)) { Status("Nothing to copy."); return; }
         Clipboard.SetText(SclBox.Text);
         Status("SCL copied to clipboard. Paste it into TIA Portal and try to compile it.");
+    }
+
+    // ================= Ctrl+F find (whole window) ==========================
+    //
+    // Searches everything the user can see, not one panel: scenario names and
+    // their text, every property and state in the tree, and all five result
+    // tabs. Each hit knows how to reveal itself - select a scenario, expand and
+    // highlight a tree node, or switch tab and select the characters.
+
+    /// <summary>One match, with the means to bring it on screen.</summary>
+    private sealed record Hit(string Where, Action Reveal);
+
+    private readonly List<Hit> _hits = new();
+    private int _hitAt = -1;
+
+    private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.F &&
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
+        {
+            OpenFind();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape && FindBar.Visibility == Visibility.Visible)
+        {
+            FindClose_Click(sender, e);
+            e.Handled = true;
+        }
+    }
+
+    private void OpenFind()
+    {
+        FindBar.Visibility = Visibility.Visible;
+
+        // Seed from the selection, the way an editor does.
+        if (ActiveResultBox() is { SelectionLength: > 0 and < 120 } box)
+            FindBox.Text = box.SelectedText;
+
+        FindBox.Focus();
+        FindBox.SelectAll();
+        Rebuild();
+    }
+
+    private void FindClose_Click(object sender, RoutedEventArgs e)
+    {
+        FindBar.Visibility = Visibility.Collapsed;
+        _hits.Clear();
+        _hitAt = -1;
+        FindWhere.Text = "";
+        FindCount.Text = "";
+    }
+
+    private void FindBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        FindHint.Visibility = string.IsNullOrEmpty(FindBox.Text)
+            ? Visibility.Visible : Visibility.Collapsed;
+        Rebuild();
+        if (_hits.Count > 0) GoTo(0);          // jump as you type
+    }
+
+    private void FindBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+        var back = (System.Windows.Input.Keyboard.Modifiers &
+                    System.Windows.Input.ModifierKeys.Shift) != 0;
+        Step(back ? -1 : +1);
+        e.Handled = true;
+    }
+
+    private void FindNext_Click(object sender, RoutedEventArgs e) => Step(+1);
+    private void FindPrev_Click(object sender, RoutedEventArgs e) => Step(-1);
+
+    private void ResultTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Character offsets belong to the old tab; they mean nothing in the new one.
+        if (!ReferenceEquals(e.OriginalSource, ResultTabs)) return;
+        if (FindBar is null || FindBar.Visibility != Visibility.Visible) return;
+        Rebuild();
+    }
+
+    /// <summary>The searchable box behind each result tab. Validation holds TextBlocks.</summary>
+    private TextBox? ActiveResultBox() => ResultTabs?.SelectedIndex switch
+    {
+        0 => SclBox, 1 => ExplanationBox, 3 => ContextBox,
+        4 => RequestBox, 5 => RawBox, _ => null,
+    };
+
+    /// <summary>Walks every searchable surface and builds the hit list in screen order.</summary>
+    private void Rebuild()
+    {
+        _hits.Clear();
+        _hitAt = -1;
+
+        var term = FindBox.Text;
+        if (term.Length == 0) { ShowFindStatus(); return; }
+
+        bool Has(string? s) =>
+            s is not null && s.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+        // ---- 1. Scenarios: the name in the list, and the text in the editor ----
+        foreach (var s in _scenarios)
+        {
+            var scenario = s;
+            if (Has(scenario.Name))
+                _hits.Add(new Hit($"Scenario: {scenario.Name}",
+                    () => ScenarioList.SelectedItem = scenario));
+
+            if (Has(scenario.Text))
+                _hits.Add(new Hit($"Text of {scenario.Name}",
+                    () => ScenarioList.SelectedItem = scenario));
+        }
+
+        // ---- 2. Properties and their states, at any depth ----
+        void WalkProps(IEnumerable<PropertyNode> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                var node = n;
+                if (Has(node.Name) || Has(node.Variable) || Has(node.Value) || Has(node.Type))
+                {
+                    var label = node.Parent is null
+                        ? $"Property: {node.Name}"
+                        : $"State: {node.Parent.Name} / {node.Name}";
+
+                    _hits.Add(new Hit(label, () =>
+                    {
+                        for (var p = node.Parent; p is not null; p = p.Parent)
+                            p.IsExpanded = true;         // open the way down to it
+                        node.IsSelected = true;
+                    }));
+                }
+                WalkProps(node.Children);
+            }
+        }
+        WalkProps(_properties);
+
+        // ---- 3. Every occurrence in every result tab ----
+        (TextBox Box, string Name, int Tab)[] tabs =
+        {
+            (SclBox,         "SCL",          0),
+            (ExplanationBox, "Explanation",  1),
+            (ContextBox,     "Context Pack", 3),
+            (RequestBox,     "Request Sent", 4),
+            (RawBox,         "Raw Response", 5),
+        };
+
+        foreach (var (box, name, tab) in tabs)
+        {
+            var text = box.Text;
+            if (string.IsNullOrEmpty(text)) continue;
+
+            var i = text.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+            while (i >= 0)
+            {
+                var at = i;
+                var line = box.GetLineIndexFromCharacterIndex(at) + 1;
+                _hits.Add(new Hit($"{name} line {line}", () =>
+                {
+                    ResultTabs.SelectedIndex = tab;
+                    box.Select(at, term.Length);
+                    box.ScrollToLine(Math.Max(0, box.GetLineIndexFromCharacterIndex(at) - 2));
+                }));
+                i = text.IndexOf(term, i + 1, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        ShowFindStatus();
+    }
+
+    private void Step(int delta)
+    {
+        if (_hits.Count == 0) { ShowFindStatus(); return; }
+        GoTo((_hitAt + delta + _hits.Count) % _hits.Count);     // wraps both ways
+    }
+
+    private void GoTo(int index)
+    {
+        if (_hits.Count == 0) return;
+        _hitAt = index;
+
+        // Reveal can change the tab or the selected scenario, which moves focus.
+        // Put it back in the find box so Enter keeps stepping.
+        _hits[index].Reveal();
+        ShowFindStatus();
+        Dispatcher.BeginInvoke(new Action(() => FindBox.Focus()),
+                               System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private void ShowFindStatus()
+    {
+        if (FindBox.Text.Length == 0) { FindWhere.Text = ""; FindCount.Text = ""; return; }
+
+        FindCount.Text = _hits.Count == 0 ? "0/0" : $"{_hitAt + 1}/{_hits.Count}";
+        FindWhere.Text = _hitAt >= 0 && _hitAt < _hits.Count ? _hits[_hitAt].Where : "";
     }
 
     /// <summary>

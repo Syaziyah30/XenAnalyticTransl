@@ -5,7 +5,8 @@
         Title="PLC Logic Builder - R&amp;D Studio"
         Height="820" Width="1280" MinHeight="560" MinWidth="880"
         WindowState="Maximized"
-        WindowStartupLocation="CenterScreen" Background="#F5F6F8">
+        WindowStartupLocation="CenterScreen" Background="#F5F6F8"
+        PreviewKeyDown="Window_PreviewKeyDown">
 
     <Window.Resources>
         <SolidColorBrush x:Key="Navy"  Color="#1F3864"/>
@@ -281,6 +282,13 @@
 
                     <TreeView x:Name="PropertyTree" BorderThickness="0" Margin="6,0,6,4" FontSize="13"
                               SelectedItemChanged="PropertyTree_SelectedItemChanged">
+                        <TreeView.ItemContainerStyle>
+                            <!-- lets Ctrl+F open and highlight a node from code -->
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                            </Style>
+                        </TreeView.ItemContainerStyle>
                         <TreeView.Resources>
                             <HierarchicalDataTemplate DataType="{x:Type local:PropertyNode}"
                                                       ItemsSource="{Binding Children}">
@@ -329,14 +337,15 @@
                     </Grid>
                 </Border>
 
-                <TabControl BorderThickness="0" Margin="4">
+                <TabControl x:Name="ResultTabs" BorderThickness="0" Margin="4"
+                            SelectionChanged="ResultTabs_SelectionChanged">
                     <TabItem Header="Generated Logic (SCL)">
-                        <TextBox x:Name="SclBox" IsReadOnly="True" FontFamily="Consolas" FontSize="13"
+                        <TextBox x:Name="SclBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="13"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto" Padding="8" Background="#FBFCFE"/>
                     </TabItem>
                     <TabItem Header="Explanation">
-                        <TextBox x:Name="ExplanationBox" IsReadOnly="True" TextWrapping="Wrap" FontSize="13"
+                        <TextBox x:Name="ExplanationBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" TextWrapping="Wrap" FontSize="13"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8"/>
                     </TabItem>
                     <TabItem Header="Validation">
@@ -351,16 +360,16 @@
                         </ScrollViewer>
                     </TabItem>
                     <TabItem Header="Context Pack">
-                        <TextBox x:Name="ContextBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                        <TextBox x:Name="ContextBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="12"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8"/>
                     </TabItem>
                     <TabItem Header="Request Sent">
-                        <TextBox x:Name="RequestBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                        <TextBox x:Name="RequestBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="12"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto" Padding="8" Background="#FBFCFE"/>
                     </TabItem>
                     <TabItem Header="Raw Response">
-                        <TextBox x:Name="RawBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                        <TextBox x:Name="RawBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="12"
                                  AcceptsReturn="True" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto" Padding="8"/>
                     </TabItem>
@@ -373,6 +382,42 @@
                 BorderThickness="0,1,0,0" Padding="10,5">
             <TextBlock x:Name="StatusBar" FontSize="12" Foreground="#444" Text="Ready."
                        TextWrapping="Wrap" MaxHeight="60"/>
+        </Border>
+
+        <!-- ============== Ctrl+F find bar ==============
+             Spans every row so it floats above the whole window, not one panel.
+             Searches scenarios, properties and all result tabs. -->
+        <Border x:Name="FindBar" Visibility="Collapsed" Panel.ZIndex="100"
+                Grid.Row="0" Grid.RowSpan="7"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,8,26,0" Padding="7,5" CornerRadius="8"
+                Background="White" BorderBrush="#C9CFDA" BorderThickness="1">
+            <Border.Effect>
+                <DropShadowEffect Color="#405A78" BlurRadius="14" ShadowDepth="2" Opacity="0.3"/>
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal">
+                <Grid Width="240" Margin="2,0,8,0">
+                    <TextBox x:Name="FindBox" FontSize="13" Padding="6,4"
+                             BorderBrush="#2F6FD0" BorderThickness="2"
+                             TextChanged="FindBox_TextChanged"
+                             PreviewKeyDown="FindBox_PreviewKeyDown"/>
+                    <TextBlock x:Name="FindHint" Text="Find anywhere in the app"
+                               Foreground="#9AA3B0" FontSize="13" Margin="10,0,0,0"
+                               IsHitTestVisible="False" VerticalAlignment="Center"/>
+                </Grid>
+                <TextBlock x:Name="FindWhere" Text="" Foreground="#1F3864" FontSize="12"
+                           FontWeight="SemiBold" VerticalAlignment="Center"
+                           Margin="0,0,8,0" MinWidth="110"/>
+                <TextBlock x:Name="FindCount" Text="" Foreground="#6B7280" FontSize="12"
+                           VerticalAlignment="Center" Margin="0,0,8,0" MinWidth="46"
+                           TextAlignment="Right"/>
+                <Button Content="&#x2191;" Click="FindPrev_Click" Width="30" Height="27"
+                        MinWidth="30" FontSize="14" ToolTip="Previous match (Shift+Enter)"/>
+                <Button Content="&#x2193;" Click="FindNext_Click" Width="30" Height="27"
+                        MinWidth="30" FontSize="14" Margin="3,0" ToolTip="Next match (Enter)"/>
+                <Button Content="&#x2715;" Click="FindClose_Click" Width="30" Height="27"
+                        MinWidth="30" FontSize="13" Margin="0" ToolTip="Close (Esc)"/>
+            </StackPanel>
         </Border>
     </Grid>
 </Window>
