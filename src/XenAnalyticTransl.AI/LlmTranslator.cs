@@ -115,7 +115,17 @@ public static class ProviderPresets
                 Model = "openrouter/free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
                 InputUsdPerM = 0m, OutputUsdPerM = 0m },
 
-        // The paid 27B. The :free variant of this slug no longer exists.
+        // Kept so the free tier can be retried - these do get restored. As of 8 Oct 2026
+        // it returns 404 on our own key even though openrouter.ai shows "PRICE: Free".
+        new() { ProviderName = "OpenRouter - Qwen3.8 27B :free (404 as of 8 Oct, retry)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        // Paid 27B. The ":free" variant of this slug is NOT usable: openrouter.ai still
+        // shows it as "PRICE: Free", but requesting it returns
+        //   404 "This model is unavailable for free. The paid version is available now"
+        // Tested 8 Oct 2026 on our own key. Trust the endpoint, not the model page.
         new() { ProviderName = "OpenRouter - Qwen3.8 27B (paid)",
                 BaseUrl = "https://openrouter.ai/api/v1",
                 Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "OPENROUTER_API_KEY",
@@ -274,14 +284,26 @@ public sealed class LlmTranslator : IDisposable
                     continue;
                 }
 
-                var hint = (int)resp.StatusCode switch
-                {
-                    429 => " - the provider is rate-limited. Try another model, or wait a minute.",
-                    402 => " - not enough credit for this model. It reserves MaxTokens x the output rate up front. Use a cheaper model, or add credit.",
-                    401 => " - the key was rejected. Check it is for this provider and, on Alibaba, the right region.",
-                    400 => " - the endpoint rejected a parameter. Some models require reasoning and refuse to have it disabled.",
-                    _ => ""
-                };
+                // Anthropic reports an empty balance as 400, not 402, so the status code
+                // alone would send the reader hunting for a bad parameter. Check the body
+                // for billing wording before falling back to the per-status hint.
+                var lower = raw.ToLowerInvariant();
+                var isBilling =
+                    lower.Contains("credit balance") || lower.Contains("too low") ||
+                    lower.Contains("purchase credits") || lower.Contains("plans & billing") ||
+                    lower.Contains("insufficient") || lower.Contains("quota");
+
+                var hint = isBilling
+                    ? " - OUT OF CREDIT on this provider. The key is fine; the account has no balance. Add credit, or switch to a free provider."
+                    : (int)resp.StatusCode switch
+                    {
+                        429 => " - the provider is rate-limited. Try another model, or wait a minute.",
+                        402 => " - not enough credit for this model. It reserves MaxTokens x the output rate up front. Use a cheaper model, or add credit.",
+                        401 => " - the key was rejected. Check it is for this provider and, on Alibaba, the right region.",
+                        400 => " - the endpoint rejected a parameter. Some models require reasoning and refuse to have it disabled.",
+                        404 => " - no such model at this provider. The slug may have been withdrawn; a free variant can disappear while its model page still says Free.",
+                        _ => ""
+                    };
                 return Fail(settings, sw,
                     $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}{hint} {Trim(raw, 500)}", raw);
             }
