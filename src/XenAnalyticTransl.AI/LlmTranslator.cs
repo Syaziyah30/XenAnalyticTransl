@@ -101,57 +101,114 @@ public static class ProviderPresets
 {
     public static IReadOnlyList<LlmSettings> All { get; } = new List<LlmSettings>
     {
-        new() { ProviderName = "OpenRouter - Qwen3.8 Flash (cheap, reliable)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0.15m, OutputUsdPerM = 0.47m },
+        // ==================================================================
+        // GROQ - the active free tier. Own daily allowance, refills every day,
+        // so it survives the other providers running dry.
+        //
+        // MaxTokens is held at 4000 on every Groq preset: the free tier allows
+        // 8K TOKENS PER MINUTE and our context pack is already ~3.5K in. At the
+        // usual 6000 a single call would exceed the per-minute ceiling and 429
+        // before the model started. DisableReasoning is off so we do not send a
+        // `reasoning` field Groq may reject.
+        //
+        // The rates below are 0 because on the free tier the calls genuinely cost
+        // nothing - these two fields only drive the cost readout in the UI, they do
+        // not control billing. If this account ever moves to the Developer plan,
+        // put Groq's published rates in or the spend display will read 0 forever:
+        //     GPT-OSS 120B   $0.15 in / $0.60 out per 1M
+        //     GPT-OSS 20B    $0.075 in / $0.30 out per 1M
+        // ==================================================================
 
-        // Routes to whatever is zero-cost right now. Named free models come and go -
-        // qwen3.8-27b:free was withdrawn mid-project and started 404ing - so prefer the
-        // router over any single :free slug. Capped around 50 requests a day, which is
-        // roughly seven full seven-scenario runs.
-        new() { ProviderName = "OpenRouter - Free (auto-router)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "openrouter/free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+        new() { ProviderName = "Groq - Qwen3.8 27B (free)",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
 
-        // Kept so the free tier can be retried - these do get restored. As of 8 Oct 2026
-        // it returns 404 on our own key even though openrouter.ai shows "PRICE: Free".
-        new() { ProviderName = "OpenRouter - Qwen3.8 27B :free (404 as of 8 Oct, retry)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+        new() { ProviderName = "Groq - GPT-OSS 120B (free)",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "openai/gpt-oss-120b", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
 
-        // Paid 27B. The ":free" variant of this slug is NOT usable: openrouter.ai still
-        // shows it as "PRICE: Free", but requesting it returns
-        //   404 "This model is unavailable for free. The paid version is available now"
-        // Tested 8 Oct 2026 on our own key. Trust the endpoint, not the model page.
-        new() { ProviderName = "OpenRouter - Qwen3.8 27B (paid)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0.20m, OutputUsdPerM = 0.60m },
+        new() { ProviderName = "Groq - GPT-OSS 20B (free, fastest)",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "openai/gpt-oss-20b", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
+
+        // Llama on Groq. Both are marked Enterprise / "Contact Sales" on Groq's own
+        // model page, and neither appears in the free-tier limits table. TESTED
+        // 9 Oct 2026 on our free key - both return
+        //   404 "The model `...` does not exist or you do not have access to it"
+        //
+        // Left ACTIVE on purpose so the dropdown shows what Groq offers and they can be
+        // retried after any plan change: the moment the account is upgraded these start
+        // working with no code edit. Until then, expect the 404.
+        new() { ProviderName = "Groq - Llama 3.3 70B (Enterprise - 404 on free tier)",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "llama-3.3-70b-versatile", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
+
+        new() { ProviderName = "Groq - Llama 3.1 8B (Enterprise - 404 on free tier)",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "llama-3.1-8b-instant", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
+
+        // ==================================================================
+        // OPENROUTER - all disabled 9 Oct 2026. The account's credit ran out and
+        // the free slug was withdrawn. Kept, not deleted: these were working
+        // presets with their quirks already worked out, and re-enabling them is
+        // just removing the slashes once the account has credit again.
+        // ==================================================================
+
+        //new() { ProviderName = "OpenRouter - Qwen3.8 Flash (cheap, reliable)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0.15m, OutputUsdPerM = 0.47m },
+
+        // Routes to whatever is zero-cost right now. Worked when tested, but caps
+        // out around 50 requests a day and its output was poor - broken SCL with
+        // no END_IF. Groq's free tier is better on both counts.
+        //new() { ProviderName = "OpenRouter - Free (auto-router)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "openrouter/free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        // Returns 404 even though openrouter.ai shows "PRICE: Free". Tested
+        // 8 Oct 2026 on our own key. Trust the endpoint, not the model page.
+        //new() { ProviderName = "OpenRouter - Qwen3.8 27B :free (404)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        //new() { ProviderName = "OpenRouter - Qwen3.8 27B (paid)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0.20m, OutputUsdPerM = 0.60m },
 
         // Max refuses `reasoning: {enabled:false}` with a 400 - reasoning is mandatory on
         // that endpoint. So leave it on and give the budget room for thinking AND answer.
         // Reasoning tokens bill as output, so a run here costs far more than Flash.
-        new() { ProviderName = "OpenRouter - Qwen3.8 Max (coding, slower, pricier)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "qwen/qwen3.8-max-0902", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 2m, OutputUsdPerM = 6m,
-                DisableReasoning = false, MaxTokens = 32000 },
+        //new() { ProviderName = "OpenRouter - Qwen3.8 Max (coding, slower, pricier)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "qwen/qwen3.8-max-0902", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 2m, OutputUsdPerM = 6m,
+        //        DisableReasoning = false, MaxTokens = 32000 },
 
-        // Gemini through the same OpenRouter key. Gemini accepts temperature, so that
-        // Need payment [soon deleted]
+        // Reasoning is mandatory on this endpoint - it 400s if you try to disable it.
         //new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite",
         //        BaseUrl = "https://openrouter.ai/api/v1",
         //        Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
         //        InputUsdPerM = 0.30m, OutputUsdPerM = 2.50m,
         //        DisableReasoning = false, MaxTokens = 10000 },
 
-        new() { ProviderName = "OpenRouter - Gemini 3.1 Flash Lite (cheapest)",
-                BaseUrl = "https://openrouter.ai/api/v1",
-                Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-                InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
+        //new() { ProviderName = "OpenRouter - Gemini 3.1 Flash Lite (cheapest)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
 
         // Hugging Face Inference Providers - an OpenAI-compatible router over Together,
         // fal, Replicate and others. Has a free tier; paid rates are the provider's own,
@@ -186,11 +243,11 @@ public static class ProviderPresets
         //        InputUsdPerM = 2m, OutputUsdPerM = 10m,
         //        SendTemperature = false },
 
-        // GPT through the SAME OpenRouter key - no Anthropic account needed.
-        new() { ProviderName = "OpenRouter - GPT 5.6 Luna (needs credit)",
-				BaseUrl = "https://openrouter.ai/api/v1",
-				Model = "openai/gpt-5.6-luna", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-				InputUsdPerM = 0.2m, OutputUsdPerM = 1.2m},
+        // GPT through the SAME OpenRouter key - disabled with the rest of OpenRouter.
+        //new() { ProviderName = "OpenRouter - GPT 5.6 Luna (needs credit)",
+        //        BaseUrl = "https://openrouter.ai/api/v1",
+        //        Model = "openai/gpt-5.6-luna", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+        //        InputUsdPerM = 0.2m, OutputUsdPerM = 1.2m },
 	};
 }
 
@@ -256,8 +313,19 @@ public sealed class LlmTranslator : IDisposable
         });
 
         // Shared provider pools return 429 intermittently, so a transient blip should
-        // not surface as a failure. Two retries with backoff, then give up.
-        const int maxAttempts = 3;
+        // not surface as a failure. Retry with backoff, then give up.
+        //
+        // A free tier's per-minute token budget is the common case, not a blip: Groq
+        // allows 7,000 INPUT tokens a minute and one context pack is ~3,400, so only two
+        // scenarios fit per minute and a seven-scenario batch needs about three and a
+        // half. Groq says exactly how long to wait ("try again in 18.9s"), so wait that
+        // long rather than guessing - a fixed 2s backoff gives up while the window is
+        // still closed, which looked like four scenarios failing at random.
+        // Six, not three: a seven-scenario batch needs ~24K input tokens against a
+        // 7K/minute allowance, so later scenarios may have to sit out two or three
+        // windows before their turn. Each wait is short (~20s) and stated by the
+        // provider, so this costs patience, not correctness.
+        const int maxAttempts = 6;
         string raw = "";
 
         for (var attempt = 1; ; attempt++)
@@ -280,7 +348,7 @@ public sealed class LlmTranslator : IDisposable
                 var retryable = (int)resp.StatusCode == 429 || (int)resp.StatusCode >= 500;
                 if (retryable && attempt < maxAttempts)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct).ConfigureAwait(false);
+                    await Task.Delay(RetryDelay(resp, raw, attempt), ct).ConfigureAwait(false);
                     continue;
                 }
 
@@ -498,6 +566,37 @@ public sealed class LlmTranslator : IDisposable
     }
 
     private static string Trim(string s, int n) => s.Length <= n ? s : s[..n] + "...";
+
+    /// <summary>
+    /// How long to wait before retrying. Providers that rate-limit on a per-minute
+    /// token budget say how long the window has left - honour that, because guessing
+    /// short just burns an attempt while the window is still closed. Capped at 70s so a
+    /// stuck provider cannot hang a batch indefinitely.
+    /// </summary>
+    private static readonly Regex TryAgainIn =
+        new(@"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*s", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static TimeSpan RetryDelay(HttpResponseMessage resp, string body, int attempt)
+    {
+        var cap = TimeSpan.FromSeconds(70);
+
+        // The standard header first.
+        var after = resp.Headers.RetryAfter;
+        if (after?.Delta is { } d && d > TimeSpan.Zero)
+            return d < cap ? d + TimeSpan.FromMilliseconds(500) : cap;
+
+        // Groq puts it in the message instead: "Please try again in 18.917142857s".
+        var m = TryAgainIn.Match(body);
+        if (m.Success && double.TryParse(m.Groups[1].Value,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var secs) && secs > 0)
+        {
+            var wait = TimeSpan.FromSeconds(secs + 0.5);   // clear the window, don't race it
+            return wait < cap ? wait : cap;
+        }
+
+        return TimeSpan.FromSeconds(2 * attempt);          // nothing stated - plain backoff
+    }
 
     private static TranslationOutcome Fail(LlmSettings s, Stopwatch sw, string error, string? raw = null, string? request = null)
     {
