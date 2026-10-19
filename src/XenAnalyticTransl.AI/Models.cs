@@ -16,6 +16,15 @@ public sealed class Term
     /// </summary>
     [JsonPropertyName("type")] public string? Type { get; set; }
     [JsonPropertyName("value")] public string? Value { get; set; }
+
+    /// <summary>
+    /// The Property and State this term was built from, kept apart. Name glues them
+    /// ("Operation Mode Auto"), and a model cannot reliably tell where one ends and the
+    /// other begins - the review formats came back as "Operation Mode Auto = On".
+    /// State is null for a property with no states, such as PLC Initialize.
+    /// </summary>
+    [JsonPropertyName("property")] public string? Property { get; set; }
+    [JsonPropertyName("state")] public string? State { get; set; }
     [JsonPropertyName("states")] public List<string>? States { get; set; }
 }
 
@@ -72,6 +81,8 @@ public sealed class TranslationOutcome
 {
     public TranslationResult? Result { get; init; }
     public List<string> UnknownIdentifiers { get; init; } = new();
+    /// <summary>Which output was asked for - SCL, Pseudocode or Logic Expression.</summary>
+    public string Target { get; init; } = "SCL";
     public string Provider { get; init; } = "";
     public string Model { get; init; } = "";
     public long ElapsedMs { get; init; }

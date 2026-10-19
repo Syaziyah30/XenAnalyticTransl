@@ -248,6 +248,212 @@ public static class PromptBuilder
         Only then produce the JSON object.
         """;
 
+    // ===================================================================
+    // Output targets
+    //
+    // The system prompt above is written for SCL. The other two targets reuse
+    // every rule about understanding the Scenario - flattening, operator
+    // meaning, never guessing - and override only what the "code" field holds.
+    // They are review formats: a manager or process engineer checks the LOGIC
+    // before anyone writes PLC code, so they use the names people say, not tags.
+    // ===================================================================
+
+    public const string TargetScl = "SCL";
+    public const string TargetPseudocode = "Pseudocode";
+    public const string TargetLogic = "Logic Expression";
+
+    /// <summary>Pseudocode first: it is the default output, the one reviewed before any PLC code.</summary>
+    public static readonly string[] Targets = [TargetPseudocode, TargetLogic, TargetScl];
+
+    /// <summary>True for the review formats, which use names rather than PLC tags.</summary>
+    public static bool UsesNames(string? target) =>
+        string.Equals(target, TargetPseudocode, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(target, TargetLogic, StringComparison.OrdinalIgnoreCase);
+
+    private const string PseudocodeRules = """
+
+        ==================================================
+        OUTPUT FORMAT OVERRIDE - PSEUDOCODE
+        ==================================================
+
+        This request is for PSEUDOCODE, NOT SCL. Every rule above about understanding
+        the Scenario still applies. Only the content of "code" changes, and it must
+        follow this house style exactly.
+
+        1. NOT SCL. The "code" field must contain none of: ":=", a semicolon, END_IF,
+           ELSIF, T#10s style literals, PLC variable names (blnTRP, SysAck, tmrRFAL),
+           TODO lines, or // comments. A placeholder PLC variable ("New Instance") is
+           not a problem here - write the name and carry on.
+
+        2. Blocks:
+               IF <condition> THEN
+                   <action>
+               ELSE
+                   <action>
+               END IF
+           Keywords in capitals: IF, THEN, ELSE, END IF, AND, OR, NOT. Indent actions by
+           4 spaces. One blank line between blocks.
+
+        3. Conditions compare with "==". When comparisons are joined by AND / OR, bracket
+           each comparison and each group: ((A == x) OR (B == y)) AND (C == OFF). A single
+           comparison needs no brackets: IF PLC Run Command == ON THEN. When a condition
+           has MORE THAN TWO comparisons, ALWAYS break the line before each top-level
+           AND / OR, and indent the continuation 3 spaces - never one long line.
+           BREAKING A LINE NEVER REMOVES A BRACKET. AND and OR must never sit side by
+           side at the same bracket level - "A OR B AND NOT C" reads as "A OR (B AND NOT
+           C)" and silently drops the fault check from A. Keep the OR group bracketed:
+               IF (((Operation Mode == auto) AND (Sequence Auto == fulfilled))
+                   OR ((Operation Mode == manual) AND (Manual == start)))
+                  AND NOT ((Trip Alarm == ON) OR (Run Fail Alarm == ON)) THEN
+
+        4. States: ON and OFF in capitals. Any other state in lowercase, as the Scenario
+           words it: fulfilled, auto, manual. Use the state names from the PROPERTIES
+           list - "Operation Mode == auto", never "Operation Mode Auto == ON".
+
+        5. Actions are plain English, starting with a verb:
+               Turn ON <name>            Turn OFF <name>
+               Set <name> to <value>
+               Increase <name> by <amount>
+               Reset <name> to <value>
+
+        6. Names come from the SCENARIO'S OWN WORDS, in Title Case, even when a supplied
+           Property has a shorter name. "PLC command Run" is "PLC Run Command", not
+           "Command". "the running time will be recorded by timer recorder" is "Running
+           Time Recorder", not "Runtime recorder". Use a Property's name only when the
+           Scenario itself uses it. Keep a name identical every time it appears.
+           A name never repeats its own state: "Manual Run == fulfilled", not
+           "Manual Run Fulfilled == fulfilled".
+
+        7. ELSE follows from the wording:
+           - An output that FOLLOWS a condition ("When X, then PLC command Run", "During
+             motor Run, the running time will be recorded") ALWAYS gets an ELSE - that is
+             what following a condition means. If the Scenario does not say what the ELSE
+             does, use the natural opposite: "Turn OFF <name>" for an output, "Reset <name>
+             to 0" for a recorder, timer or counter. Then add a warning naming the ELSE
+             action as ASSUMED, so the reviewer confirms it.
+           - An output SWITCHED by an event ("turn on Trip Alarm", "turn off Trip Buzzer",
+             "once") gets NO ELSE: it holds its value until the next event. Write the
+             event as "IF <name> turns ON THEN".
+           - An output that TRACKS another signal under a condition ("When in Auto, the
+             Manual position will according with Operation Signal", "follow", "change and
+             retain according with") is copied inside the IF and gets NO ELSE:
+                 IF Operation Mode == auto THEN
+                     Set Manual to match Operation Signal
+                 END IF
+             Outside the condition someone else owns that output - in Manual mode it is
+             the operator's - so an ELSE that forces it would override them. Never split
+             tracking into "IF signal == run THEN start ELSE stop".
+
+        8. Flatten referenced Scenarios into the condition, in brackets, rather than
+           naming them.
+
+        9. Anything the Scenario leaves undefined - an output turned on but never off, a
+           reset value it never states - goes in "warnings", stated exactly.
+
+        10. "variables_used" lists the names used.
+
+        Example 1 - an output that follows a condition.
+        Scenario: "When Manual Run Fulfilled or Auto Run Fulfilled, without trip Alarm,
+        then PLC command Run. During motor Run, the running time will be recorded by
+        timer recorder."
+        ---
+        IF ((Manual Run == fulfilled) OR (Auto Run == fulfilled))
+           AND (Trip Alarm == OFF) THEN
+            Turn ON PLC Run Command
+        ELSE
+            Turn OFF PLC Run Command
+        END IF
+
+        IF PLC Run Command == ON THEN
+            Increase Running Time Recorder by 1 second
+        ELSE
+            Reset Running Time Recorder to 0
+        END IF
+        ---
+        warnings: ["ELSE assumed: Running Time Recorder is reset to 0 when the PLC Run Command is OFF - the Scenario does not say. If running hours must accumulate, remove the reset."]
+
+        Example 2 - outputs switched by events.
+        Scenario: "When Trip Signal is On, turn on Trip Alarm, turn on Trip Buzzer once.
+        When HMI Acknowledge, turn off Trip Buzzer."
+        ---
+        IF Trip Signal == ON THEN
+            Turn ON Trip Alarm
+        END IF
+
+        IF Trip Signal turns ON THEN
+            Turn ON Trip Buzzer
+        END IF
+
+        IF HMI Acknowledge == ON THEN
+            Turn OFF Trip Buzzer
+        END IF
+        ---
+        warnings: ["Trip Alarm is turned ON but never turned OFF - the Scenario does not say when it clears."]
+        """;
+
+    private const string LogicRules = """
+
+        ==================================================
+        OUTPUT FORMAT OVERRIDE - LOGIC EXPRESSION
+        ==================================================
+
+        This request is for LOGIC EXPRESSIONS, not SCL. Every rule above about
+        understanding the Scenario still applies. Only the content of "code" changes:
+
+        1. Use the Property, State and Term NAMES exactly as supplied, NEVER the PLC
+           variables. A missing or placeholder PLC variable is not a problem here.
+           Do not write TODO lines.
+        2. Operators: AND, OR, NOT and brackets only. Write every bracket that affects
+           precedence, even where it is technically optional.
+           Terms arrive as "<Property> <State>" - "Trip Signal On". For an On/Off
+           property use the bare Property name to mean On: "Trip Signal", and
+           "NOT Trip Signal" for Off - never "Trip Signal On". For any other state,
+           write it as a comparison: "(Operation Mode = Auto)".
+        3. Classify each OUTPUT first, then write it in that form:
+           LATCHED - the Scenario turns it on and off with separate words, or turns it
+           on with no stated condition for turning it off ("turn on", "set", "once"):
+                <Output>:  SET = <condition>   RESET = <condition>
+                <Output> = (<SET> OR <Output>) AND NOT <RESET>
+           CONTINUOUS - the Scenario says it holds while a condition holds ("When X,
+           then command Run"). It switches off by itself when the condition is false,
+           so there is NO SET/RESET line and NO missing-reset warning:
+                <Output> = <condition>
+           Name the output by its Property alone: "Command", not "Command Run".
+        4. Write an event ("once", "turns On", "on trip") as a rising edge, the
+           symbol "^" before the name: "^Trip Signal". Define every edge used, on its
+           own line: "where ^X = X AND NOT X(previous scan)".
+        5. If the Scenario never states a SET or a RESET, write "RESET = not defined" -
+           do NOT invent one - and name it in "warnings".
+        6. Flatten referenced Scenarios into the expression, in brackets.
+        7. One output per block, a blank line between blocks. No prose in "code".
+        8. "variables_used" lists the Property / Term NAMES used.
+
+        Example - Scenario: "When Trip Signal is On, turn on Trip Alarm, turn on Trip
+        Buzzer once. When HMI Acknowledge, turn off Trip Buzzer."
+            Trip Alarm:   SET = Trip Signal            RESET = not defined
+            Trip Alarm  = Trip Signal OR Trip Alarm
+
+            Trip Buzzer:  SET = ^Trip Signal           RESET = HMI Acknowledge
+            Trip Buzzer = (^Trip Signal OR Trip Buzzer) AND NOT HMI Acknowledge
+
+            where ^Trip Signal = Trip Signal AND NOT Trip Signal(previous scan)
+        warnings: ["Trip Alarm has no RESET - the Scenario never says when it turns off."]
+
+        Example - CONTINUOUS, with a multi-state property and a flattened reference.
+        Scenario: "When auto run ready and no faults, then will command run."
+            Command = (Operation Mode = Auto) AND Sequence Auto AND NOT (Trip Alarm OR Run Fail Alarm)
+        warnings: []
+        """;
+
+    /// <summary>
+    /// The system prompt for a given output target. SCL gets the prompt unchanged;
+    /// the review formats get it plus an override for what "code" contains.
+    /// </summary>
+    public static string SystemPromptFor(string? target) =>
+        string.Equals(target, TargetPseudocode, StringComparison.OrdinalIgnoreCase) ? SystemPrompt + PseudocodeRules
+        : string.Equals(target, TargetLogic, StringComparison.OrdinalIgnoreCase) ? SystemPrompt + LogicRules
+        : SystemPrompt;
+
     public static string BuildUserMessage(ContextPack pack)
     {
         var sb = new StringBuilder();
@@ -270,6 +476,36 @@ public static class PromptBuilder
             sb.AppendLine();
         }
 
+        // The review formats are written in names, so give them names in a shape that
+        // cannot be misread: each Property once, its States listed beside it. PLC tags
+        // are left out entirely - they are not wanted in the output, and showing them
+        // only invites the model to use them, or to stall on the "New Instance" ones.
+        if (UsesNames(pack.TargetLanguage) && pack.Terms.Any(t => t.Property is not null))
+        {
+            sb.AppendLine("PROPERTIES AND THEIR STATES - the property is the name, the state is its value.");
+            sb.AppendLine("Write them in the notation the output format requires. A property with no");
+            sb.AppendLine("states is a condition in itself.");
+            // Models copy the casing they are shown, whatever the rules say - the first
+            // pseudocode run came back "Fulfilled" and "On". So hand pseudocode its states
+            // already in house style: ON / OFF in capitals, every other state lowercase.
+            var pseudo = string.Equals(pack.TargetLanguage, TargetPseudocode, StringComparison.OrdinalIgnoreCase);
+            static string HouseStyle(string s) =>
+                s.Equals("on", StringComparison.OrdinalIgnoreCase) || s.Equals("off", StringComparison.OrdinalIgnoreCase)
+                    ? s.ToUpperInvariant()
+                    : s.ToLowerInvariant();
+
+            foreach (var g in pack.Terms.Where(t => t.Property is not null).GroupBy(t => t.Property!))
+            {
+                var states = g.Select(t => t.State).Where(s => !string.IsNullOrWhiteSpace(s))
+                              .Select(s => pseudo ? HouseStyle(s!) : s!).ToList();
+                sb.AppendLine(states.Count > 0
+                    ? $"- {g.Key}: states {string.Join(", ", states)}"
+                    : $"- {g.Key} (no states)");
+            }
+            sb.AppendLine();
+        }
+        else
+        {
         sb.AppendLine("TERMS, PLC VARIABLES AND DATA TYPES - the only variables you may use");
         if (pack.Terms.Count == 0)
         {
@@ -288,8 +524,9 @@ public static class PromptBuilder
             }
         }
         sb.AppendLine();
+        }
 
-        if (pack.Timers.Count > 0)
+        if (pack.Timers.Count > 0 && !UsesNames(pack.TargetLanguage))   // timer list is PLC tags
         {
             sb.AppendLine("TIMERS available (IEC TON):");
             foreach (var t in pack.Timers) sb.AppendLine($"- {t}");

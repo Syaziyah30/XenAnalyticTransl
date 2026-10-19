@@ -72,6 +72,121 @@ public static class CodeCleaner
     private static readonly Regex ParentheticalOnly =
         new(@"^\(.*\)[.]?$", RegexOptions.Compiled);
 
+    private static readonly Regex TimeLiteral = new(@"\bT#\d", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// SCL that leaked into a pseudocode answer. The prompt forbids it, and a model
+    /// asked for pseudocode will still slip into the language it knows best -
+    /// "blnOut := 1;" in the middle of plain English. Reports what was found rather
+    /// than silently rewriting, so the reviewer knows the output is not clean.
+    /// </summary>
+    public static List<string> FindSclSyntax(string? code, IEnumerable<string> plcVariables)
+    {
+        var found = new List<string>();
+        if (string.IsNullOrWhiteSpace(code)) return found;
+
+        var lines = code.Replace("\r\n", "\n").Split('\n');
+
+        if (code.Contains(":=")) found.Add("\":=\" assignment");
+        if (lines.Any(l => l.TrimEnd().EndsWith(';'))) found.Add("semicolons");
+        if (Regex.IsMatch(code, @"\bEND_(IF|FOR|WHILE|CASE)\b|\bELSIF\b")) found.Add("END_IF / ELSIF keywords");
+        if (TimeLiteral.IsMatch(code)) found.Add("T# time literals");
+        if (lines.Any(l => CommentLine.IsMatch(l))) found.Add("// comments");
+
+        // PLC tags. Whole word, case-sensitive - "Command" must not match "blnOut".
+        // Placeholders with spaces ("New Instance") are not real tags; skip them.
+        var tags = plcVariables
+            .Where(v => !string.IsNullOrWhiteSpace(v) && !v.Contains(' ') && v.Length > 2)
+            .Distinct()
+            .Where(v => Regex.IsMatch(code, $@"\b{Regex.Escape(v)}\b"))
+            .ToList();
+        if (tags.Count > 0) found.Add("PLC tags (" + string.Join(", ", tags) + ")");
+
+        return found;
+    }
+
+    /// <summary>
+    /// Conditions where AND and OR sit side by side at the same bracket depth. Read with
+    /// normal precedence, "A OR B AND NOT C" is "A OR (B AND NOT C)" - which on the
+    /// Operation scenario let auto run ignore the fault check. A reader cannot tell
+    /// whether that was meant, so any mix at one level is flagged.
+    ///
+    /// Checks each IF ... THEN condition, and each right-hand side of a logic
+    /// expression ("Output = ..."). Keywords are matched as whole words, case-sensitive,
+    /// which is how both review formats write them.
+    /// </summary>
+    public static List<string> FindAmbiguousPrecedence(string? code)
+    {
+        var found = new List<string>();
+        if (string.IsNullOrWhiteSpace(code)) return found;
+
+        var text = code.Replace("\r\n", "\n");
+        var conditions = new List<string>();
+
+        foreach (Match m in Regex.Matches(text, @"\bIF\b(.*?)\bTHEN\b", RegexOptions.Singleline))
+            conditions.Add(m.Groups[1].Value);
+        foreach (Match m in Regex.Matches(text, @"^[^\n:=]+=\s*(.+)$", RegexOptions.Multiline))
+            if (!m.Value.Contains("==") && !m.Value.TrimStart().StartsWith("where")) conditions.Add(m.Groups[1].Value);
+
+        foreach (var c in conditions)
+        {
+            // Blank out everything inside brackets, leaving only the top level.
+            var depth = 0;
+            var top = new System.Text.StringBuilder(c.Length);
+            foreach (var ch in c)
+            {
+                if (ch == '(') { depth++; top.Append(' '); continue; }
+                if (ch == ')') { depth = Math.Max(0, depth - 1); top.Append(' '); continue; }
+                top.Append(depth == 0 ? ch : ' ');
+            }
+
+            var level = top.ToString();
+            if (Regex.IsMatch(level, @"\bAND\b") && Regex.IsMatch(level, @"\bOR\b"))
+            {
+                var shown = Regex.Replace(c.Trim(), @"\s+", " ");
+                found.Add(shown.Length > 90 ? shown[..90] + "..." : shown);
+            }
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Removes // comments - whole lines and trailing ones. Pseudocode carries none: the
+    /// house style is plain IF / THEN / END IF. The base prompt asks SCL for short
+    /// labels, and that habit bleeds into pseudocode answers, so strip them rather than
+    /// make the reviewer read past them. Returns how many were removed.
+    /// </summary>
+    public static (string Code, int Removed) StripComments(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return (code ?? "", 0);
+
+        var removed = 0;
+        var kept = new List<string>();
+        foreach (var line in code.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (CommentLine.IsMatch(line)) { removed++; continue; }
+
+            var at = line.IndexOf("//", StringComparison.Ordinal);
+            if (at >= 0) { kept.Add(line[..at].TrimEnd()); removed++; }
+            else kept.Add(line);
+        }
+
+        var text = Regex.Replace(string.Join("\n", kept), @"\n{3,}", "\n\n").Trim('\n');
+        return (text, removed);
+    }
+
+    /// <summary>
+    /// Some models escape the newlines in "code" twice, so the text arrives with a
+    /// literal backslash-n where each line break should be and shows as one long line.
+    /// Only repaired when the code has no real line breaks at all - otherwise a "\n"
+    /// might be legitimate content.
+    /// </summary>
+    public static string UnescapeNewlines(string? code)
+    {
+        if (string.IsNullOrEmpty(code) || code.Contains('\n') || !code.Contains("\\n")) return code ?? "";
+        return code.Replace("\\r\\n", "\n").Replace("\\n", "\n").Replace("\\t", "    ");
+    }
+
     public static (string Code, int Removed) Clean(string? code)
     {
         if (string.IsNullOrWhiteSpace(code)) return (code ?? "", 0);

@@ -4,11 +4,19 @@ using XenAnalyticTransl.AI;
 //
 //   dotnet run --project src\XenAnalyticTransl.Cli -- list
 //   dotnet run --project src\XenAnalyticTransl.Cli -- <model-id>
-//   dotnet run --project src\XenAnalyticTransl.Cli -- <model-id> "<scenario>" [motor|valve]
+//   dotnet run --project src\XenAnalyticTransl.Cli -- <model-id> "<scenario>" [motor|valve] [pseudo|logic|scl]
+//
+// Output defaults to pseudocode, matching the Studio.
 
 var model = args.Length > 0 ? args[0] : "qwen/qwen3.8-flash";
 var wanted = args.Length > 1 ? args[1] : "Operation";
 var equipName = args.Length > 2 ? args[2] : "motor";
+var target = (args.Length > 3 ? args[3] : "pseudo").ToLowerInvariant() switch
+{
+    "scl"                    => PromptBuilder.TargetScl,
+    "logic" or "expression"  => PromptBuilder.TargetLogic,
+    _                        => PromptBuilder.TargetPseudocode,
+};
 var equipmentId = equipName.Equals("valve", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
 
 // ---- Statement table, Lipico profile -------------------------------------
@@ -89,6 +97,7 @@ var key = settings.ResolveApiKey();
 Console.WriteLine($"model     : {settings.Model}");
 Console.WriteLine($"equipment : {(equipmentId == 1 ? "Motor" : "Valve")}");
 Console.WriteLine($"scenario  : {current.Name}");
+Console.WriteLine($"output    : {target}");
 Console.WriteLine($"key       : {(string.IsNullOrWhiteSpace(key) ? "MISSING" : $"present ({key.Length} chars)")}");
 Console.WriteLine();
 
@@ -97,9 +106,10 @@ Console.WriteLine();
 // blnMA, with Auto = 0 and Manual = 1.
 var terms = new List<Term>();
 void State(string prop, string variable, string type, string state, string value) =>
-    terms.Add(new Term { Name = $"{prop} {state}", Variable = variable, Type = type, Value = value });
+    terms.Add(new Term { Name = $"{prop} {state}", Variable = variable, Type = type, Value = value,
+                         Property = prop, State = state });
 void Plain(string prop, string variable, string type) =>
-    terms.Add(new Term { Name = prop, Variable = variable, Type = type });
+    terms.Add(new Term { Name = prop, Variable = variable, Type = type, Property = prop });
 
 State("Operation Mode", "blnMA", "INT", "Auto", "0");
 State("Operation Mode", "blnMA", "INT", "Manual", "1");
@@ -132,7 +142,7 @@ Plain("HMI Acknowledge", "SysAck", "BOOL");
 var pack = new ContextPack
 {
     Equipment = equipmentId == 1 ? "Motor" : "Valve",
-    TargetLanguage = "SCL",
+    TargetLanguage = target,
     Scenario = current.Text,
     ReferencedScenarios = pool
         .Where(s => s.Name != current.Name)
@@ -141,7 +151,12 @@ var pack = new ContextPack
     Terms = terms,
     Timers = terms.Where(t => t.Type == "TON").Select(t => t.Variable).Distinct().ToList(),
     Functions = ["HMI", "PLC", "Delay Timer", "Time Recorder"],
-    Conventions = "Siemens TIA Portal SCL. Comment each block with the sentence it implements."
+    // Matches the Studio. The old "comment each block with the sentence" wording had
+    // drifted here after the Studio moved to short labels.
+    Conventions = PromptBuilder.UsesNames(target)
+        ? $"Output is {target} for review by an engineer. Use names, not PLC tags."
+        : "Siemens TIA Portal SCL. Label each block with a short comment, " +
+          "at most 8 words. Do not copy the scenario sentence into the code."
 };
 
 using var translator = new LlmTranslator();

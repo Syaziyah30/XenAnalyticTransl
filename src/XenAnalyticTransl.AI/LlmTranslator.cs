@@ -287,7 +287,7 @@ public sealed class LlmTranslator : IDisposable
             ["max_tokens"] = settings.MaxTokens,
             ["messages"] = new object[]
             {
-                new { role = "system", content = PromptBuilder.SystemPrompt },
+                new { role = "system", content = PromptBuilder.SystemPromptFor(pack.TargetLanguage) },
                 new { role = "user",   content = PromptBuilder.BuildUserMessage(pack) }
             }
         };
@@ -365,11 +365,12 @@ public sealed class LlmTranslator : IDisposable
                     ? " - OUT OF CREDIT on this provider. The key is fine; the account has no balance. Add credit, or switch to a free provider."
                     : (int)resp.StatusCode switch
                     {
-                        429 => " - the provider is rate-limited. Try another model, or wait a minute.",
-                        402 => " - not enough credit for this model. It reserves MaxTokens x the output rate up front. Use a cheaper model, or add credit.",
-                        401 => " - the key was rejected. Check it is for this provider and, on Alibaba, the right region.",
-                        400 => " - the endpoint rejected a parameter. Some models require reasoning and refuse to have it disabled.",
-                        404 => " - no such model at this provider. The slug may have been withdrawn; a free variant can disappear while its model page still says Free.",
+						400 => " - the endpoint rejected a parameter. Some models require reasoning and refuse to have it disabled.",
+						401 => " - the key was rejected. Check it is for this provider and, on Alibaba, the right region.",
+						402 => " - not enough credit for this model. It reserves MaxTokens x the output rate up front. Use a cheaper model, or add credit.",
+						404 => " - no such model at this provider. The slug may have been withdrawn; a free variant can disappear while its model page still says Free.",
+						429 => " - the provider is rate-limited. Try another model, or wait a minute.",
+
                         _ => ""
                     };
                 return Fail(settings, sw,
@@ -468,6 +469,9 @@ public sealed class LlmTranslator : IDisposable
         if (result is null)
             return Fail(settings, sw, "Model returned an empty result.", content, requestJson);
 
+        // Double-escaped newlines arrive as a literal "\n" and render as one long line.
+        result.Code = CodeCleaner.UnescapeNewlines(result.Code);
+
         // Some models write their deliberation into the code as comments however firmly
         // the prompt forbids it. Strip it; note it so the behaviour stays visible.
         var (cleaned2, removed) = CodeCleaner.Clean(result.Code);
@@ -476,16 +480,45 @@ public sealed class LlmTranslator : IDisposable
             result.Code = cleaned2;
             result.Warnings.Add(
                 $"{removed} comment line(s) of model deliberation were stripped from the code. " +
-                "The reasoning is in the explanation; only SCL and scenario comments are kept here.");
+                "The reasoning is in the explanation; only the logic and short labels are kept here.");
         }
 
-        var unknown = TagValidator.FindUnknown(result, pack).ToList();
+        // AND and OR side by side at one bracket level change meaning silently - on the
+        // Operation scenario it let auto run skip the fault check. Applies to every
+        // target: SCL binds AND tighter than OR exactly the same way.
+        foreach (var amb in CodeCleaner.FindAmbiguousPrecedence(result.Code))
+            result.Warnings.Insert(0,
+                "AMBIGUOUS PRECEDENCE - AND and OR at the same bracket level, so the order of " +
+                $"evaluation is not what it looks like. Check the brackets: {amb}");
+
+        // Pseudocode is only useful if it IS pseudocode. Flag any SCL that slipped in -
+        // a manager reading "blnOut := 1;" has been handed the wrong thing.
+        if (string.Equals(pack.TargetLanguage, PromptBuilder.TargetPseudocode, StringComparison.OrdinalIgnoreCase))
+        {
+            // Comments are just labels - harmless to drop, so drop them rather than flag.
+            (result.Code, _) = CodeCleaner.StripComments(result.Code);
+
+            var leaks = CodeCleaner.FindSclSyntax(result.Code, pack.Terms.Select(t => t.Variable));
+            if (leaks.Count > 0)
+                result.Warnings.Insert(0,
+                    "NOT PURE PSEUDOCODE - SCL found in the output: " + string.Join("; ", leaks) +
+                    ". Re-run, or try a stronger model.");
+        }
+
+        // The tag check compares identifiers against PLC variables. Pseudocode and logic
+        // expressions deliberately use Property NAMES ("Trip Alarm"), so every one of
+        // them would be reported unknown. Skip it for those - they are review formats,
+        // checked by a person reading the logic, not by a compiler.
+        var unknown = PromptBuilder.UsesNames(pack.TargetLanguage)
+            ? new List<string>()
+            : TagValidator.FindUnknown(result, pack).ToList();
 
         sw.Stop();
         return new TranslationOutcome
         {
             Result = result,
             UnknownIdentifiers = unknown,
+            Target = pack.TargetLanguage,
             Provider = settings.ProviderName,
             Model = settings.Model,
             ElapsedMs = sw.ElapsedMilliseconds,
