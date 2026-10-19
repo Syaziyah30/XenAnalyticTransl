@@ -1,45 +1,93 @@
 # XenAnalyticTransl
 
-Turning plain-English control scenarios into Siemens SCL (Structured Text), using a
-large language model.
+Turning plain-English control scenarios into **pseudocode**, **logic expressions** or
+**Siemens SCL**, using a large language model.
 
 An engineer writes a scenario the way they would explain it to a colleague -
 *"When auto run ready or manual run ready and no faults, then will command run"* - and
-defines the terms it uses against real PLC tags. The translator sends that to a model
-and returns compilable SCL, an explanation, and a list of anything it could not resolve.
+defines the properties it uses. The translator sends that to a model and returns the
+logic, an explanation, and a list of anything it could not resolve.
 
 This is the AI layer for **PLC Logic Builder**, an existing Windows desktop application.
 
 ## Status
 
-**R&D, not production.** The current question is *which model to ship*, not whether the
-pipeline works - that part runs end to end. Nothing generated here goes near equipment
-without an engineer reading it first.
+**R&D, not production.** The pipeline runs end to end. Nothing generated here goes near
+equipment without an engineer reading it first, and nothing has been compiled in TIA
+Portal yet.
 
-Qwen3.8 Flash is the front-runner: correct logic, roughly RM0.002 per scenario. Claude
-Sonnet 5 produces the sharpest warnings at ~35x the cost.
+## Three outputs
+
+| Output | For | Uses |
+|---|---|---|
+| **Pseudocode** (default) | Reviewing the logic before any PLC code is written | Property names |
+| **Logic Expression** | Checking conditions and latches as Boolean algebra | Property names |
+| **SCL** | The PLC itself | PLC tags |
+
+The review formats come first on purpose. They use the names people say rather than PLC
+tags, so they can express logic the tag data cannot yet: while six properties share the
+placeholder tag `New Instance`, SCL has to leave the fault interlock as a TODO, but
+pseudocode writes it in full. Review in pseudocode, then generate SCL.
+
+Pseudocode follows a fixed house style:
+
+```
+IF ((Manual Run == fulfilled) OR (Auto Run == fulfilled))
+   AND (Trip Alarm == OFF) THEN
+    Turn ON PLC Run Command
+ELSE
+    Turn OFF PLC Run Command
+END IF
+```
+
+## Built-in checks
+
+The model is not trusted on its own. Every result is checked before it is shown:
+
+| Check | Catches | Applies to |
+|---|---|---|
+| Tag validator | PLC variables the model invented | SCL |
+| SCL-leak guard | `:=`, `;`, `END_IF` or PLC tags inside pseudocode | Pseudocode |
+| Precedence guard | `AND` and `OR` at the same bracket level - `A OR B AND NOT C` silently drops the check from `A` | All |
+| Code cleaner | The model's own deliberation written into the code | All |
+
+A failed check shows in the result header (`CHECK BRACKETS`, `CONTAINS SCL SYNTAX`) and in
+the Validation tab.
 
 ## Layout
 
 | Project | What it is |
 |---|---|
-| `src/XenAnalyticTransl.AI` | Context pack, prompt, provider client, tag validator. Provider-neutral. **This is the deliverable** - it drops into PLC Logic Builder later |
-| `src/XenAnalyticTransl.Studio` | WPF test rig for comparing models side by side. Disposable |
+| `src/XenAnalyticTransl.AI` | Context pack, prompt, provider client, checks. Provider-neutral. **This is the deliverable** - it drops into PLC Logic Builder later |
+| `src/XenAnalyticTransl.Studio` | WPF test rig for comparing models and outputs side by side. Disposable |
 | `src/XenAnalyticTransl.Cli` | Same pipeline, no UI. For debugging and batch runs |
 
-Any OpenAI-compatible endpoint works. Ten presets ship, covering OpenRouter, Anthropic
-direct and Hugging Face; per-model quirks are flags on the preset rather than branches in
-the code.
+The translation rules are hardcoded in `src/XenAnalyticTransl.AI/PromptBuilder.cs`. That
+is the file to edit to change how the model translates; rebuild afterwards.
+
+## Providers
+
+Any OpenAI-compatible endpoint works; per-model quirks are flags on the preset, not
+branches in the code. Presets live in `ProviderPresets` in `LlmTranslator.cs`.
+
+| Provider | Status |
+|---|---|
+| **Groq** | **Active.** Free daily allowance. Qwen3.8 27B, GPT-OSS 120B and GPT-OSS 20B all tested working |
+| Anthropic (Claude) | Presets kept. Strongest output in testing; needs account credit |
+| Hugging Face | Preset kept. Free credit exhausted |
+| OpenRouter | Presets commented out, not deleted - remove the `//` to restore them once the account has credit |
+
+Groq's two Llama models are Enterprise-only and return 404 on a free key.
 
 ## Quick start
 
-Set a key - never commit one, this repo mirrors to two remotes:
+Set a key - never commit one, this repo mirrors to two remotes. Use `setx`, not `set`:
 
 ```
-setx OPENROUTER_API_KEY "your-key"
+setx GROQ_API_KEY "your-key"
 ```
 
-Reopen your terminal, then:
+Close and reopen your terminal, then:
 
 ```
 dotnet build XenAnalyticTransl.slnx
@@ -47,28 +95,43 @@ dotnet run --project src/XenAnalyticTransl.Studio
 ```
 
 The Studio opens on the Lipico profile with real data loaded - 7 Motor and 2 Valve
-scenarios across 16 properties. Press **Request AI Translator** to translate all of them.
+scenarios across 16 properties. Choose an **Output**, then press **Request AI Translator**
+to translate every scenario of the selected equipment.
 
-Full setup, the preset table and troubleshooting are in
-[Reference/00-START-HERE.md](Reference/00-START-HERE.md).
+From the command line:
+
+```
+dotnet run --project src/XenAnalyticTransl.Cli -- openai/gpt-oss-120b "Trip" motor pseudo
+```
+
+The last argument is `pseudo`, `logic` or `scl`; it defaults to `pseudo`.
+
+**Groq free-tier limits shape how it runs.** It allows about 7,000 input tokens a minute
+and one scenario sends about 4,400, so a full seven-scenario run takes two to three
+minutes - the app waits out each limit and retries rather than failing. The daily allowance
+covers roughly 40 calls, about five full runs.
 
 ## Known limits
 
-Two defects in the source data cap output quality more than model choice does:
-
-- Six properties share the placeholder tag `New Instance`, so no model can tell them
-  apart. Giving them real names cut output from 2,425 tokens to 724 and restored a fault
-  interlock the model had been omitting.
-- `MCC Trip` has both `Trip Off` and `Trip On` set to `0`.
-
-Output also varies between runs even at temperature 0, which is why the validator and the
-engineer review both exist.
+- **Six properties share the tag `New Instance`** - MCC Trip, VOP, Trip Alarm, Run Fail
+  Alarm, Run Fail Buzzer, Trip Buzzer. SCL cannot name them. Giving them real names cut
+  output from 2,425 tokens to 724 and restored a fault interlock the model had been
+  omitting. This is the biggest single limit on SCL quality.
+- **Valve scenarios use names the data does not contain** - "Manual Run Fulfilled",
+  "motor Run", "timer recorder", "Trip Alarm Timer", "Trip Feedback". The model has to
+  invent names for them, so wording varies from run to run.
+- **Output varies between runs**, even at low temperature. Logic is usually stable;
+  names and layout drift. Run a scenario more than once before judging a model.
+- **Assumed behaviour is flagged, not hidden.** Where a scenario does not say what happens
+  otherwise - an ELSE, a reset - the model states its assumption in the warnings.
+- **Results are not saved automatically.** Use **Save Run...** or they are lost when the
+  app closes.
 
 ## Documentation
 
 | File | Covers |
 |---|---|
-| [Reference/00-START-HERE.md](Reference/00-START-HERE.md) | Setup, running it, models, troubleshooting |
+| [Reference/00-START-HERE.md](Reference/00-START-HERE.md) | Setup, running it, troubleshooting |
 | [Reference/execution-plan.md](Reference/execution-plan.md) | Project plan and milestones |
 | [docs/master-plan.md](docs/master-plan.md) | Wider programme plan |
 | [docs/gemini-integration-flow.md](docs/gemini-integration-flow.md) | Integration flowchart |
