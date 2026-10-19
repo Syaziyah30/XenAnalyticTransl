@@ -193,6 +193,9 @@ public partial class MainWindow : Window
         foreach (var p in ProviderPresets.All) ProviderBox.Items.Add(p.ProviderName);
         ProviderBox.SelectedIndex = 0;
 
+        foreach (var t in PromptBuilder.Targets) OutputBox.Items.Add(t);
+        OutputBox.SelectedIndex = 0;
+
         _tick.Tick += (_, _) => TimeText.Text = $"{_runClock.Elapsed.TotalSeconds:0.0} s";
         _recolour.Tick += (_, _) => { _recolour.Stop(); Recolour(); };
 
@@ -515,7 +518,9 @@ public partial class MainWindow : Window
                     Name = n.QualifiedName,
                     Variable = n.EffectiveVariable,
                     Type = n.EffectiveType,
-                    Value = string.IsNullOrWhiteSpace(n.Value) ? null : n.Value
+                    Value = string.IsNullOrWhiteSpace(n.Value) ? null : n.Value,
+                    Property = n.Parent?.Name ?? n.Name,
+                    State = n.Parent is null ? null : n.Name
                 });
             }
             foreach (var c in n.Children) Walk(c);
@@ -626,6 +631,7 @@ public partial class MainWindow : Window
             ResultStatus.Text = "Not translated yet";
             MetricsPanel.Visibility = Visibility.Collapsed;
             _lastOutcome = null;
+            LabelOutput(SelectedTarget);
             return;
         }
 
@@ -654,7 +660,6 @@ public partial class MainWindow : Window
         return new ContextPack
         {
             Equipment = _equipmentId == 1 ? "Motor" : "Valve",
-            TargetLanguage = "SCL",
             Scenario = s?.Text ?? "",
             // Every other scenario goes along, so references like "auto run ready" can be
             // resolved and flattened instead of guessed at.
@@ -667,8 +672,13 @@ public partial class MainWindow : Window
                 .Where(t => string.Equals(t.Type, "TON", StringComparison.OrdinalIgnoreCase))
                 .Select(t => t.Variable).Distinct().ToList(),
             Functions = new List<string> { "HMI", "PLC", "Delay Timer", "Time Recorder" },
-            Conventions = "Siemens TIA Portal SCL. Label each block with a short comment, " +
-                          "at most 8 words. Do not copy the scenario sentence into the code."
+            TargetLanguage = SelectedTarget,
+            // The SCL convention would contradict the review formats, which must not use
+            // tags or SCL syntax - so only send it when SCL is what was asked for.
+            Conventions = PromptBuilder.UsesNames(SelectedTarget)
+                ? $"Output is {SelectedTarget} for review by an engineer. Use names, not PLC tags."
+                : "Siemens TIA Portal SCL. Label each block with a short comment, " +
+                  "at most 8 words. Do not copy the scenario sentence into the code."
         };
     }
 
@@ -706,11 +716,67 @@ public partial class MainWindow : Window
                 System.Windows.Media.Color.FromRgb(0x12, 0x44, 0x7F));
     }
 
+    /// <summary>
+    /// The request as the AI reads it, not as it travels. On the wire the message is
+    /// JSON, which cannot hold a real line break inside a string, so every break is the
+    /// two characters "\n" - the rule book arrives as one enormous line of them. Here the
+    /// JSON is parsed back: settings on top, then each message under its role with real
+    /// line breaks. The exact JSON is unchanged in Save Run, so nothing is lost.
+    /// </summary>
+    private static string ReadableRequest(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var sb = new System.Text.StringBuilder();
+
+            sb.AppendLine("What was sent to the AI, shown with real line breaks.");
+            sb.AppendLine("(In transit each line break travels as \\n - that is how JSON carries text.)");
+            sb.AppendLine();
+
+            // Settings first: everything except the messages, one per line.
+            foreach (var p in root.EnumerateObject())
+            {
+                if (p.NameEquals("messages")) continue;
+                var value = p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.GetRawText();
+                sb.AppendLine($"{p.Name.ToUpperInvariant().Replace('_', ' '),-18}{value}");
+            }
+
+            if (root.TryGetProperty("messages", out var messages))
+            {
+                foreach (var m in messages.EnumerateArray())
+                {
+                    var role = m.TryGetProperty("role", out var r) ? r.GetString() ?? "" : "";
+                    var label = role switch
+                    {
+                        "system" => "SYSTEM  -  the rules",
+                        "user"   => "USER  -  the task",
+                        _        => role.ToUpperInvariant()
+                    };
+                    var content = m.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
+
+                    sb.AppendLine();
+                    sb.AppendLine($"==================== {label} ====================");
+                    sb.AppendLine();
+                    sb.AppendLine(content.Replace("\r\n", "\n").TrimEnd());
+                }
+            }
+            return sb.ToString();
+        }
+        catch (JsonException)
+        {
+            return json;                    // not JSON after all - show it untouched
+        }
+    }
+
     private void Render(TranslationOutcome o)
     {
         RawBox.Text = o.RawResponse ?? "";
-        RequestBox.Text = o.RequestBody ?? "";
+        RequestBox.Text = ReadableRequest(o.RequestBody);
         ShowMetrics(o);
+        LabelOutput(o.Target);          // the result says what it is, whatever the dropdown says now
 
         if (!o.Ok)
         {
@@ -727,15 +793,22 @@ public partial class MainWindow : Window
         SclBox.Text = r.Code;
         ExplanationBox.Text = r.Explanation;
 
-        UnknownBox.Text = o.UnknownIdentifiers.Count == 0
-            ? "None - every identifier exists in the tag table."
-            : string.Join(Environment.NewLine, o.UnknownIdentifiers.Select(u => "  " + u));
+        UnknownBox.Text = PromptBuilder.UsesNames(o.Target)
+            ? $"Not checked - {o.Target} uses Property names, not PLC tags. Review the logic by reading it."
+            : o.UnknownIdentifiers.Count == 0
+                ? "None - every identifier exists in the tag table."
+                : string.Join(Environment.NewLine, o.UnknownIdentifiers.Select(u => "  " + u));
 
         WarningsBox.Text = r.Warnings.Count == 0
             ? "None reported."
             : string.Join(Environment.NewLine, r.Warnings.Select(w => "  " + w));
 
-        var verdict = o.UnknownIdentifiers.Count == 0 ? "Generated successfully" : "Generated WITH UNKNOWN IDENTIFIERS";
+        var sclLeak = r.Warnings.Any(w => w.StartsWith("NOT PURE PSEUDOCODE", StringComparison.Ordinal));
+        var badBrackets = r.Warnings.Any(w => w.StartsWith("AMBIGUOUS PRECEDENCE", StringComparison.Ordinal));
+        var verdict = badBrackets ? "Generated - CHECK BRACKETS"
+            : sclLeak ? "Generated - CONTAINS SCL SYNTAX"
+            : o.UnknownIdentifiers.Count == 0 ? "Generated successfully"
+            : "Generated WITH UNKNOWN IDENTIFIERS";
         ResultStatus.Text = verdict;
 
         Status($"{verdict}  |  {o.Model}  |  {o.ElapsedMs} ms  |  " +
@@ -839,6 +912,32 @@ public partial class MainWindow : Window
         if (!ReferenceEquals(e.OriginalSource, ResultTabs)) return;
         if (FindBar is null || FindBar.Visibility != Visibility.Visible) return;
         Rebuild();
+    }
+
+    // ================= output target =======================================
+
+    /// <summary>SCL, Pseudocode or Logic Expression, from the Output dropdown.</summary>
+    private string SelectedTarget =>
+        OutputBox?.SelectedItem as string ?? PromptBuilder.TargetPseudocode;   // the default output
+
+    /// <summary>Names the result tab and the copy button after what the result actually is.</summary>
+    private void LabelOutput(string? target)
+    {
+        if (OutputTab is null || CopyBtn is null) return;
+        var t = string.IsNullOrWhiteSpace(target) ? PromptBuilder.TargetScl : target;
+
+        OutputTab.Header = t == PromptBuilder.TargetScl ? "Generated Logic (SCL)" : $"Generated {t}";
+        CopyBtn.Content = t == PromptBuilder.TargetScl ? "Copy SCL" : $"Copy {t}";
+        if (ResultTitle is not null) ResultTitle.Text = $"AI Translation Result ({t})";
+    }
+
+    private void OutputBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // A result already on screen keeps its own label - switching the dropdown
+        // changes what the NEXT request asks for, not what the last one was.
+        if (ScenarioList?.SelectedItem is Scenario { Outcome: not null }) return;
+        LabelOutput(SelectedTarget);
+        if (ScenarioList is not null) Status($"Output set to {SelectedTarget}. Press Request AI Translator to generate it.");
     }
 
     /// <summary>The searchable box behind each result tab. Validation holds TextBlocks.</summary>

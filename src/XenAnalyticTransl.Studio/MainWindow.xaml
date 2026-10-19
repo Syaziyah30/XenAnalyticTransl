@@ -85,6 +85,10 @@
                 <TextBox   Grid.Column="5" x:Name="ModelBox" VerticalAlignment="Center" Padding="4,3"/>
 
                 <StackPanel Grid.Column="6" Orientation="Horizontal" Margin="14,0,0,0">
+                    <TextBlock Text="Output" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="OutputBox" Width="140" VerticalAlignment="Center" Margin="0,0,10,0"
+                              SelectionChanged="OutputBox_SelectionChanged"
+                              ToolTip="SCL for the PLC. Pseudocode or Logic Expression for reviewing the logic before any code is written."/>
                     <Button x:Name="KeyStatusBtn" Content="Key: checking..." Click="CheckKey_Click"
                             ToolTip="Reads the API key from the environment variable. Click to re-check."/>
                     <Button x:Name="TranslateBtn" Content="Request AI Translator"
@@ -312,7 +316,8 @@
             <DockPanel>
                 <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
                     <Grid>
-                        <TextBlock Text="AI Translation Result (SCL)" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock x:Name="ResultTitle" Text="AI Translation Result (Pseudocode)"
+                                   Style="{StaticResource PanelTitle}"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <TextBlock x:Name="ResultStatus" Text="Not run yet" VerticalAlignment="Center"
                                        Margin="0,0,14,0" FontSize="12" Foreground="#666"/>
@@ -328,7 +333,7 @@
                                                Margin="10,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Border>
-                            <Button Content="Copy SCL" Click="CopyScl_Click"/>
+                            <Button x:Name="CopyBtn" Content="Copy SCL" Click="CopyScl_Click"/>
                             <Button Content="Save Run..." Click="SaveRun_Click"
                                     ToolTip="Save scenario, prompt and result as a JSON file for the evaluation set"/>
                             <Button Content="Clear Result" Click="ClearResult_Click"
@@ -339,7 +344,7 @@
 
                 <TabControl x:Name="ResultTabs" BorderThickness="0" Margin="4"
                             SelectionChanged="ResultTabs_SelectionChanged">
-                    <TabItem Header="Generated Logic (SCL)">
+                    <TabItem x:Name="OutputTab" Header="Generated Logic (SCL)">
                         <TextBox x:Name="SclBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="13"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto" Padding="8" Background="#FBFCFE"/>
@@ -361,12 +366,14 @@
                     </TabItem>
                     <TabItem Header="Context Pack">
                         <TextBox x:Name="ContextBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="12"
-                                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8"/>
+                                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                 TextWrapping="Wrap" HorizontalScrollBarVisibility="Disabled" Padding="8"/>
                     </TabItem>
                     <TabItem Header="Request Sent">
                         <TextBox x:Name="RequestBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="12"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Auto" Padding="8" Background="#FBFCFE"/>
+                                 TextWrapping="Wrap" HorizontalScrollBarVisibility="Disabled"
+                                 Padding="8" Background="#FBFCFE"/>
                     </TabItem>
                     <TabItem Header="Raw Response">
                         <TextBox x:Name="RawBox" IsReadOnly="True" IsInactiveSelectionHighlightEnabled="True" FontFamily="Consolas" FontSize="12"
