@@ -145,17 +145,17 @@ public static class ProviderPresets
         // Left ACTIVE on purpose so the dropdown shows what Groq offers and they can be
         // retried after any plan change: the moment the account is upgraded these start
         // working with no code edit. Until then, expect the 404.
-        new() { ProviderName = "Groq - Llama 3.3 70B (Enterprise - 404 on free tier)",
-                BaseUrl = "https://api.groq.com/openai/v1",
-                Model = "llama-3.3-70b-versatile", ApiKeyEnvVar = "GROQ_API_KEY",
-                InputUsdPerM = 0m, OutputUsdPerM = 0m,
-                DisableReasoning = false, MaxTokens = 4000 },
+        //new() { ProviderName = "Groq - Llama 3.3 70B (Enterprise - 404 on free tier)",
+        //        BaseUrl = "https://api.groq.com/openai/v1",
+        //        Model = "llama-3.3-70b-versatile", ApiKeyEnvVar = "GROQ_API_KEY",
+        //        InputUsdPerM = 0m, OutputUsdPerM = 0m,
+        //        DisableReasoning = false, MaxTokens = 4000 },
 
-        new() { ProviderName = "Groq - Llama 3.1 8B (Enterprise - 404 on free tier)",
-                BaseUrl = "https://api.groq.com/openai/v1",
-                Model = "llama-3.1-8b-instant", ApiKeyEnvVar = "GROQ_API_KEY",
-                InputUsdPerM = 0m, OutputUsdPerM = 0m,
-                DisableReasoning = false, MaxTokens = 4000 },
+        //new() { ProviderName = "Groq - Llama 3.1 8B (Enterprise - 404 on free tier)",
+        //        BaseUrl = "https://api.groq.com/openai/v1",
+        //        Model = "llama-3.1-8b-instant", ApiKeyEnvVar = "GROQ_API_KEY",
+        //        InputUsdPerM = 0m, OutputUsdPerM = 0m,
+        //        DisableReasoning = false, MaxTokens = 4000 },
 
         // ==================================================================
         // OPENROUTER - all disabled 9 Oct 2026. The account's credit ran out and
