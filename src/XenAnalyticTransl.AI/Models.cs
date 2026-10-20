@@ -82,7 +82,7 @@ public sealed class TranslationOutcome
     public TranslationResult? Result { get; init; }
     public List<string> UnknownIdentifiers { get; init; } = new();
     /// <summary>Which output was asked for - SCL, Pseudocode or Logic Expression.</summary>
-    public string Target { get; init; } = "SCL";
+    public string Target { get; set; } = "SCL";
     public string Provider { get; init; } = "";
     public string Model { get; init; } = "";
     public long ElapsedMs { get; init; }

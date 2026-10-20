@@ -158,11 +158,7 @@ public static class ProviderPresets
         //        DisableReasoning = false, MaxTokens = 4000 },
 
         // ==================================================================
-        // OPENROUTER - all disabled 9 Oct 2026. The account's credit ran out and
-        // the free slug was withdrawn. Kept, not deleted: these were working
-        // presets with their quirks already worked out, and re-enabling them is
-        // just removing the slashes once the account has credit again.
-        // ==================================================================
+        // OPENROUTER - all disabled 9 Oct 2026 OUT OF CREDIT
 
         //new() { ProviderName = "OpenRouter - Qwen3.8 Flash (cheap, reliable)",
         //        BaseUrl = "https://openrouter.ai/api/v1",
@@ -210,13 +206,15 @@ public static class ProviderPresets
         //        Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
         //        InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
 
-        // Hugging Face Inference Providers - an OpenAI-compatible router over Together,
-        // fal, Replicate and others. Has a free tier; paid rates are the provider's own,
-        // so the cost estimate below is left at zero rather than guessed.
-        new() { ProviderName = "HuggingFace - Llama 3.1 8B Instruct",
-                BaseUrl = "https://router.huggingface.co/v1",
-                Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
-                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        /// HUGGING FACE - OUT OF TOKEN
+        //// Hugging Face Inference Providers - an OpenAI-compatible router over Together,
+        //// fal, Replicate and others. Has a free tier; paid rates are the provider's own,
+        //// so the cost estimate below is left at zero rather than guessed.
+        //new() { ProviderName = "HuggingFace - Llama 3.1 8B Instruct",
+        //        BaseUrl = "https://router.huggingface.co/v1",
+        //        Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
+        //        InputUsdPerM = 0m, OutputUsdPerM = 0m },
 
         // Claude direct, via Anthropic's OpenAI-compatibility layer.
         // Anthropic documents this as a testing/comparison path, not production - fine for
@@ -272,6 +270,17 @@ public sealed class LlmTranslator : IDisposable
 
     public async Task<TranslationOutcome> TranslateAsync(
         ContextPack pack, LlmSettings settings, CancellationToken ct = default)
+    {
+        // Stamp the target on EVERY outcome, failures included. The error paths return
+        // early through Fail(), which knows nothing about the target, so a failed
+        // Pseudocode request used to come back labelled "SCL" by default.
+        var outcome = await TranslateCoreAsync(pack, settings, ct).ConfigureAwait(false);
+        outcome.Target = pack.TargetLanguage;
+        return outcome;
+    }
+
+    private async Task<TranslationOutcome> TranslateCoreAsync(
+        ContextPack pack, LlmSettings settings, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
 
