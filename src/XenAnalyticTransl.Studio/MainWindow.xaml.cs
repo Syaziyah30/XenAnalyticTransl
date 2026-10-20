@@ -844,8 +844,9 @@ public partial class MainWindow : Window
     private int _hitAt = -1;
 
     /// <summary>Every result box that find paints into.</summary>
-    private TextBox[] SearchableBoxes =>
-        [SclBox, ExplanationBox, ContextBox, RequestBox, RawBox];
+    // Only the visible tab. The other result tabs are hidden, and jumping to a match in
+    // one would open it.
+    private TextBox[] SearchableBoxes => [SclBox];
 
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -941,11 +942,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The searchable box behind each result tab. Validation holds TextBlocks.</summary>
-    private TextBox? ActiveResultBox() => ResultTabs?.SelectedIndex switch
-    {
-        0 => SclBox, 1 => ExplanationBox, 3 => ContextBox,
-        4 => RequestBox, 5 => RawBox, _ => null,
-    };
+    private TextBox? ActiveResultBox() => SclBox;      // the only visible result tab
 
     /// <summary>Walks every searchable surface and builds the hit list in screen order.</summary>
     private void Rebuild()
@@ -1011,11 +1008,7 @@ public partial class MainWindow : Window
         // ---- 3. Every occurrence in every result tab ----
         (TextBox Box, string Name, int Tab)[] tabs =
         {
-            (SclBox,         "SCL",          0),
-            (ExplanationBox, "Explanation",  1),
-            (ContextBox,     "Context Pack", 3),
-            (RequestBox,     "Request Sent", 4),
-            (RawBox,         "Raw Response", 5),
+            (SclBox, "Result", 0),     // the other tabs are hidden - see SearchableBoxes
         };
 
         foreach (var (box, name, tab) in tabs)
