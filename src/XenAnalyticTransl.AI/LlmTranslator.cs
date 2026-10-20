@@ -6,117 +6,61 @@ using System.Text.RegularExpressions;
 
 namespace XenAnalyticTransl.AI;
 
-/// <summary>Which endpoint to call, with what model and key.</summary>
+/// Which endpoint to call, with what model and key.
 public sealed class LlmSettings
 {
     public string ProviderName { get; set; } = "";
-    /// <summary>OpenAI-compatible base URL, ending in /v1 (no trailing slash).</summary>
+
+    /// OpenAI-compatible base URL
     public string BaseUrl { get; set; } = "";
     public string Model { get; set; } = "";
-    /// <summary>Environment variable that holds the key. The key itself is never stored here.</summary>
+
+    /// Environment variable that holds the key. The key itself is never stored here.
     public string ApiKeyEnvVar { get; set; } = "";
-    /// <summary>
-    /// 0 = always take the most likely token. Does not make output perfectly
-    /// reproducible - GPU batching and provider routing still vary - but it removes
-    /// the sampling randomness that is ours to control.
-    /// </summary>
+
+    /// 0 = always take the most likely token. 
     public double Temperature { get; set; } = 0.0;
 
-    /// <summary>
-    /// Whether to send `temperature` at all. Default ON.
-    ///
-    /// The Claude 5 family removed sampling parameters - sending temperature returns
-    /// 400 "`temperature` is deprecated for this model". Set false for those endpoints.
-    /// </summary>
+
+    /// Send `temperature` default == ON.
     public bool SendTemperature { get; set; } = true;
 
-    /// <summary>
-    /// Sends response_format = json_object. Default OFF.
-    ///
-    /// On a router like OpenRouter this narrows provider selection to those supporting
-    /// the parameter, which can land you on a rate-limited one and fail with 429 while
-    /// the same model succeeds without it. The system prompt already demands bare JSON
-    /// and the parser strips code fences, so this buys very little. Turn it on only for
-    /// a direct provider endpoint that documents support for it.
-    /// </summary>
+        /// Response_format = JSON. Default == OFF.
     public bool RequestJsonMode { get; set; } = false;
 
-    /// <summary>
-    /// Seconds to wait for a reply. ZERO OR LESS MEANS NO DEADLINE - the call runs until
-    /// the model answers or the user presses Cancel.
-    ///
-    /// No deadline is the default: a slow model is still a useful model, and cutting it
-    /// off wastes the tokens already generated. The cost is that a dead connection waits
-    /// forever, so Cancel is the only way out of a stall.
-    /// </summary>
-    public int TimeoutSeconds { get; set; } = 0;
+	/// TimeoutSeconds how many seconds the app waits for the AI's reply.
+	/// TimeoutSeconds = 0 means app waiting until either: the AI sends its answer or user press cancel
+	public int TimeoutSeconds { get; set; } = 0;
 
-    /// <summary>
-    /// Output ceiling. Must be sent: providers that meter against a credit balance
-    /// reserve the model's ENTIRE context window when this is absent, and reject the
-    /// request with 402 even though the actual reply would cost a fraction of a cent.
-    /// Must also leave room for reasoning models, which spend this budget thinking
-    /// before they write anything - too low and the reply is cut off at zero characters.
-    /// </summary>
-    /// Sized to the job: one scenario's SCL plus explanation runs 700-2,100 tokens with
-    /// thinking off, so 6,000 is ample headroom. Keep it tight - providers reserve
-    /// max_tokens x the output rate against your balance before running anything, so an
-    /// over-generous ceiling fails with 402 on a small balance for no benefit.
-    /// Models that must think need far more (see the Qwen Max preset).
+    /// Output ceiling. 
+    /// 1 scenario's ~ runs 700-2,100 tokens with so 6,000 token = ample headroom. 
     public int MaxTokens { get; set; } = 6000;
 
-    /// <summary>
-    /// Asks the router to turn the model's reasoning off (OpenRouter's `reasoning` field).
-    ///
-    /// Qwen3.8 Flash and friends are reasoning models: left alone they can burn the whole
-    /// token budget thinking and return EMPTY content with finish_reason "length" - billed
-    /// in full for nothing. Translation from a structured context pack does not need
-    /// extended reasoning. Set false for endpoints that reject the parameter.
-    /// </summary>
-    public bool DisableReasoning { get; set; } = true;
 
-    /// <summary>
-    /// Extra fields merged into the request body, for provider-specific parameters.
-    ///
-    /// Claude 5 models think by default, which on this task triples the output tokens
-    /// and the wall time for no measurable gain - translation from a structured context
-    /// pack is not a reasoning problem. Pass {"thinking": {type = "disabled"}} to turn
-    /// it off. Unknown fields are ignored by most endpoints, so this is safe per preset.
-    /// </summary>
-    public Dictionary<string, object>? ExtraBody { get; set; }
+	/// DisableReasoning = true means the model skip thinking. just give the answer.
+	public bool DisableReasoning { get; set; } = true;
 
-    /// <summary>Published USD price per 1M tokens, for the local spend estimate.
-    /// Only some providers report a balance; for the rest we work it out from usage.</summary>
+	/// Dictionary = Extra settings added to the request for Claude 5 to thinks by default.
+    /// other model is not thinking. only Claude 5 is thinking
+	public Dictionary<string, object>? ExtraBody { get; set; }
+
+    /// Published USD price per 1M tokens, for the local spend estimate.
     public decimal InputUsdPerM { get; set; }
     public decimal OutputUsdPerM { get; set; }
 
-    /// <summary>Reads the key from the environment at call time. Returns null when unset.</summary>
+    /// Reads the key from the environment
     public string? ResolveApiKey() =>
         string.IsNullOrWhiteSpace(ApiKeyEnvVar) ? null
             : Environment.GetEnvironmentVariable(ApiKeyEnvVar);
 }
 
-/// <summary>Starting points for the providers worth trying. All speak the OpenAI protocol.</summary>
+/// Starting points for the providers
 public static class ProviderPresets
 {
     public static IReadOnlyList<LlmSettings> All { get; } = new List<LlmSettings>
     {
         // ==================================================================
-        // GROQ - the active free tier. Own daily allowance, refills every day,
-        // so it survives the other providers running dry.
-        //
-        // MaxTokens is held at 4000 on every Groq preset: the free tier allows
-        // 8K TOKENS PER MINUTE and our context pack is already ~3.5K in. At the
-        // usual 6000 a single call would exceed the per-minute ceiling and 429
-        // before the model started. DisableReasoning is off so we do not send a
-        // `reasoning` field Groq may reject.
-        //
-        // The rates below are 0 because on the free tier the calls genuinely cost
-        // nothing - these two fields only drive the cost readout in the UI, they do
-        // not control billing. If this account ever moves to the Developer plan,
-        // put Groq's published rates in or the spend display will read 0 forever:
-        //     GPT-OSS 120B   $0.15 in / $0.60 out per 1M
-        //     GPT-OSS 20B    $0.075 in / $0.30 out per 1M
+        // GROQ - the active free tier. 
         // ==================================================================
 
         new() { ProviderName = "Groq - Qwen3.8 27B (free)",
@@ -137,123 +81,107 @@ public static class ProviderPresets
                 InputUsdPerM = 0m, OutputUsdPerM = 0m,
                 DisableReasoning = false, MaxTokens = 4000 },
 
-        // Llama on Groq. Both are marked Enterprise / "Contact Sales" on Groq's own
-        // model page, and neither appears in the free-tier limits table. TESTED
-        // 9 Oct 2026 on our free key - both return
-        //   404 "The model `...` does not exist or you do not have access to it"
-        //
-        // Left ACTIVE on purpose so the dropdown shows what Groq offers and they can be
-        // retried after any plan change: the moment the account is upgraded these start
-        // working with no code edit. Until then, expect the 404.
-        //new() { ProviderName = "Groq - Llama 3.3 70B (Enterprise - 404 on free tier)",
-        //        BaseUrl = "https://api.groq.com/openai/v1",
-        //        Model = "llama-3.3-70b-versatile", ApiKeyEnvVar = "GROQ_API_KEY",
-        //        InputUsdPerM = 0m, OutputUsdPerM = 0m,
-        //        DisableReasoning = false, MaxTokens = 4000 },
+        // Llama on Groq == No longer supported free access [need to delet soon]
 
-        //new() { ProviderName = "Groq - Llama 3.1 8B (Enterprise - 404 on free tier)",
-        //        BaseUrl = "https://api.groq.com/openai/v1",
-        //        Model = "llama-3.1-8b-instant", ApiKeyEnvVar = "GROQ_API_KEY",
-        //        InputUsdPerM = 0m, OutputUsdPerM = 0m,
-        //        DisableReasoning = false, MaxTokens = 4000 },
+        new() { ProviderName = "[NO ACCESS] Groq - Llama 3.3 70B",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "llama-3.3-70b-versatile", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
+
+        new() { ProviderName = "[NO ACCESS] Groq - Llama 3.1 8",
+                BaseUrl = "https://api.groq.com/openai/v1",
+                Model = "llama-3.1-8b-instant", ApiKeyEnvVar = "GROQ_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m,
+                DisableReasoning = false, MaxTokens = 4000 },
 
         // ==================================================================
-        // OPENROUTER - all disabled 9 Oct 2026 OUT OF CREDIT
+        // OPENROUTER - All disabled 9 Oct 2026 OUT OF CREDIT
+        // ==================================================================
 
-        //new() { ProviderName = "OpenRouter - Qwen3.8 Flash (cheap, reliable)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0.15m, OutputUsdPerM = 0.47m },
-
-        // Routes to whatever is zero-cost right now. Worked when tested, but caps
-        // out around 50 requests a day and its output was poor - broken SCL with
-        // no END_IF. Groq's free tier is better on both counts.
-        //new() { ProviderName = "OpenRouter - Free (auto-router)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "openrouter/free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0m, OutputUsdPerM = 0m },
-
-        // Returns 404 even though openrouter.ai shows "PRICE: Free". Tested
-        // 8 Oct 2026 on our own key. Trust the endpoint, not the model page.
-        //new() { ProviderName = "OpenRouter - Qwen3.8 27B :free (404)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0m, OutputUsdPerM = 0m },
-
-        //new() { ProviderName = "OpenRouter - Qwen3.8 27B (paid)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0.20m, OutputUsdPerM = 0.60m },
-
-        // Max refuses `reasoning: {enabled:false}` with a 400 - reasoning is mandatory on
-        // that endpoint. So leave it on and give the budget room for thinking AND answer.
-        // Reasoning tokens bill as output, so a run here costs far more than Flash.
-        //new() { ProviderName = "OpenRouter - Qwen3.8 Max (coding, slower, pricier)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "qwen/qwen3.8-max-0902", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 2m, OutputUsdPerM = 6m,
-        //        DisableReasoning = false, MaxTokens = 32000 },
-
-        // Reasoning is mandatory on this endpoint - it 400s if you try to disable it.
-        //new() { ProviderName = "OpenRouter - Gemini 3.5 Flash Lite",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0.30m, OutputUsdPerM = 2.50m,
-        //        DisableReasoning = false, MaxTokens = 10000 },
-
-        //new() { ProviderName = "OpenRouter - Gemini 3.1 Flash Lite (cheapest)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Qwen3.8 Flash ",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "qwen/qwen3.8-flash", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.15m, OutputUsdPerM = 0.47m },
 
 
-        /// HUGGING FACE - OUT OF TOKEN
-        //// Hugging Face Inference Providers - an OpenAI-compatible router over Together,
-        //// fal, Replicate and others. Has a free tier; paid rates are the provider's own,
-        //// so the cost estimate below is left at zero rather than guessed.
-        //new() { ProviderName = "HuggingFace - Llama 3.1 8B Instruct",
-        //        BaseUrl = "https://router.huggingface.co/v1",
-        //        Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
-        //        InputUsdPerM = 0m, OutputUsdPerM = 0m },
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Free",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "openrouter/free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m },
 
-        // Claude direct, via Anthropic's OpenAI-compatibility layer.
-        // Anthropic documents this as a testing/comparison path, not production - fine for
-        // R&D model comparison. Model ids use dashes: claude-opus-5, claude-sonnet-5.
-        new() { ProviderName = "Claude - Anthropic direct (Opus 5)",
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Qwen3.8 27B :free (404)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "qwen/qwen3.8-27b:free", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Qwen3.8 27B",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "qwen/qwen3.8-27b", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.20m, OutputUsdPerM = 0.60m },
+
+
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Qwen3.8 Max ",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "qwen/qwen3.8-max-0902", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 2m, OutputUsdPerM = 6m,
+                DisableReasoning = false, MaxTokens = 32000 },
+
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Gemini 3.5 Flash Lite ",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "google/gemini-3.5-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.30m, OutputUsdPerM = 2.50m,
+                DisableReasoning = false, MaxTokens = 10000 },
+
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Gemini 3.1 Flash Lite (cheapest)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "google/gemini-3.1-flash-lite", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.30m, OutputUsdPerM = 1.20m },
+
+        new() { ProviderName = "[NO TOKEN] OpenRouter - Claude Sonnet 5 (needs credit)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "anthropic/claude-sonnet-5", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 2m, OutputUsdPerM = 10m,
+                SendTemperature = false },
+
+        new() { ProviderName = "[NO TOKEN] OpenRouter - GPT 5.6 Luna (needs credit)",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                Model = "openai/gpt-5.6-luna", ApiKeyEnvVar = "OPENROUTER_API_KEY",
+                InputUsdPerM = 0.2m, OutputUsdPerM = 1.2m },
+
+
+        // ==================================================================
+        // HUGGING FACE - All disabled 9 Oct 2026 OUT OF CREDIT
+        // ==================================================================
+
+        new() { ProviderName = "[NO TOKEN] HuggingFace - Llama 3.1 8B Instruct",
+                BaseUrl = "https://router.huggingface.co/v1",
+                Model = "meta-llama/Llama-3.1-8B-Instruct", ApiKeyEnvVar = "HUGGINGFACE_API_KEY",
+                InputUsdPerM = 0m, OutputUsdPerM = 0m },
+
+        // ==================================================================
+        // Claude via Anthropic's - All disabled 9 Oct 2026 OUT OF CREDIT
+        // ==================================================================
+        new() { ProviderName = "[NO TOKEN] Claude - Anthropic direct (Opus 5)",
                 BaseUrl = "https://api.anthropic.com/v1",
                 Model = "claude-opus-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY",
                 InputUsdPerM = 5m, OutputUsdPerM = 25m,
                 SendTemperature = false, DisableReasoning = false,
                 ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
-        new() { ProviderName = "Claude - Anthropic direct (Sonnet 5, cheaper)",
+        new() { ProviderName = "[NO TOKEN] Claude - Anthropic direct (Sonnet 5, cheaper)",
                 BaseUrl = "https://api.anthropic.com/v1",
                 Model = "claude-sonnet-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY",
                 InputUsdPerM = 2m, OutputUsdPerM = 10m,
                 SendTemperature = false, DisableReasoning = false,
                 ExtraBody = new() { ["thinking"] = new { type = "disabled" } } },
 
-        // Claude through the SAME OpenRouter key - no Anthropic account needed.
-        // ERROR in running cpde. insufficient credit. [NEED TO REMOVE SOON]
-        //new() { ProviderName = "OpenRouter - Claude Sonnet 5 (needs credit)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "anthropic/claude-sonnet-5", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 2m, OutputUsdPerM = 10m,
-        //        SendTemperature = false },
 
-        // GPT through the SAME OpenRouter key - disabled with the rest of OpenRouter.
-        //new() { ProviderName = "OpenRouter - GPT 5.6 Luna (needs credit)",
-        //        BaseUrl = "https://openrouter.ai/api/v1",
-        //        Model = "openai/gpt-5.6-luna", ApiKeyEnvVar = "OPENROUTER_API_KEY",
-        //        InputUsdPerM = 0.2m, OutputUsdPerM = 1.2m },
 	};
 }
 
-/// <summary>
-/// Calls any OpenAI-compatible chat-completions endpoint. Deliberately provider-neutral:
-/// swapping Qwen for a self-hosted model, or for another vendor, is a BaseUrl and Model
-/// change, not a rewrite.
-/// </summary>
+
+/// Calls any OpenAI-compatible chat-completions endpoint. 
 public sealed class LlmTranslator : IDisposable
 {
     private readonly HttpClient _http;
@@ -262,24 +190,22 @@ public sealed class LlmTranslator : IDisposable
     {
         _http = http ?? new HttpClient();
 
-        // HttpClient defaults to 100 seconds and throws its own TaskCanceledException,
-        // which used to fire before our own deadline and get reported with the wrong
-        // number. Timing is this class's business, so disable the built-in one.
+		// Don't stop waiting after 100 seconds. Let the app decide when to stop.
         _http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<TranslationOutcome> TranslateAsync(
         ContextPack pack, LlmSettings settings, CancellationToken ct = default)
     {
-        // Stamp the target on EVERY outcome, failures included. The error paths return
-        // early through Fail(), which knows nothing about the target, so a failed
-        // Pseudocode request used to come back labelled "SCL" by default.
-        var outcome = await TranslateCoreAsync(pack, settings, ct).ConfigureAwait(false);
-        outcome.Target = pack.TargetLanguage;
-        return outcome;
+		// Remember which output was asked for (Pseudocode, Logic, SCL), even if the request fails.
+		var outcome = await TranslateCoreAsync(pack, settings, ct).ConfigureAwait(false);
+		outcome.Target = pack.TargetLanguage;
+		return outcome;
     }
 
-    private async Task<TranslationOutcome> TranslateCoreAsync(
+
+	// ===== REQUEST (sent to the AI) =====
+	private async Task<TranslationOutcome> TranslateCoreAsync(
         ContextPack pack, LlmSettings settings, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -313,28 +239,16 @@ public sealed class LlmTranslator : IDisposable
         if (settings.ExtraBody is not null)
             foreach (var kv in settings.ExtraBody) body[kv.Key] = kv.Value;
 
-        // Kept so the app can show exactly what was sent. Safe to display: the API key
-        // travels in the Authorization header, never in the body.
-        var requestJson = JsonSerializer.Serialize(body, new JsonSerializerOptions
+		// Save a copy of the message so the Request Sent tab can show it. The API key isn't in it.
+		var requestJson = JsonSerializer.Serialize(body, new JsonSerializerOptions
         {
             WriteIndented = true,
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         });
 
-        // Shared provider pools return 429 intermittently, so a transient blip should
-        // not surface as a failure. Retry with backoff, then give up.
-        //
-        // A free tier's per-minute token budget is the common case, not a blip: Groq
-        // allows 7,000 INPUT tokens a minute and one context pack is ~3,400, so only two
-        // scenarios fit per minute and a seven-scenario batch needs about three and a
-        // half. Groq says exactly how long to wait ("try again in 18.9s"), so wait that
-        // long rather than guessing - a fixed 2s backoff gives up while the window is
-        // still closed, which looked like four scenarios failing at random.
-        // Six, not three: a seven-scenario batch needs ~24K input tokens against a
-        // 7K/minute allowance, so later scenarios may have to sit out two or three
-        // windows before their turn. Each wait is short (~20s) and stated by the
-        // provider, so this costs patience, not correctness.
-        const int maxAttempts = 6;
+		// If the provider = "too many requests" (429), wait and try again, up to 6 times.
+		// Groq's free plan only allows about 2 scenarios per minute, so later scenarios must wait their turn.
+		const int maxAttempts = 6;
         string raw = "";
 
         for (var attempt = 1; ; attempt++)
@@ -361,10 +275,9 @@ public sealed class LlmTranslator : IDisposable
                     continue;
                 }
 
-                // Anthropic reports an empty balance as 400, not 402, so the status code
-                // alone would send the reader hunting for a bad parameter. Check the body
-                // for billing wording before falling back to the per-status hint.
-                var lower = raw.ToLowerInvariant();
+				// Check if the error == money (no credit), by looking for words like "credit balance".
+				// We can't rely on the error number: Claude uses 400 for "no credit" instead of 402.
+				var lower = raw.ToLowerInvariant();
                 var isBilling =
                     lower.Contains("credit balance") || lower.Contains("too low") ||
                     lower.Contains("purchase credits") || lower.Contains("plans & billing") ||
@@ -401,8 +314,8 @@ public sealed class LlmTranslator : IDisposable
             }
         }
 
-        // ---- unwrap the OpenAI envelope ----
-        string content;
+		// RESPONSE (received from the AI)
+		string content;
         int promptTokens = 0, completionTokens = 0;
         try
         {
@@ -422,9 +335,8 @@ public sealed class LlmTranslator : IDisposable
             return Fail(settings, sw, $"Could not read the response envelope: {ex.Message}", raw, requestJson);
         }
 
-        // A reasoning model that runs out of budget mid-thought returns HTTP 200 with an
-        // empty content string. Say so plainly rather than failing on "invalid JSON".
-        if (string.IsNullOrWhiteSpace(content))
+		// If the AI sends back an empty answer, find out why (usually it ran out of tokens while thinking).
+		if (string.IsNullOrWhiteSpace(content))
         {
             var finish = "unknown";
             try
@@ -450,10 +362,10 @@ public sealed class LlmTranslator : IDisposable
         }
         catch (JsonException)
         {
-            // Two more chances, in order of likelihood:
-            //   1. prose wrapped around the object - dig the object out
-            //   2. raw control characters inside a string literal - escape them
-            var salvaged = ExtractJsonObject(cleaned) ?? cleaned;
+			// The AI's answer wasn't clean JSON. Try to fix it:
+			//   1. If it added extra text around the JSON, cut the JSON out
+			//   2. If it put broken characters inside the text, repair them
+			var salvaged = ExtractJsonObject(cleaned) ?? cleaned;
             try
             {
                 result = JsonSerializer.Deserialize<TranslationResult>(salvaged);
@@ -481,9 +393,8 @@ public sealed class LlmTranslator : IDisposable
         // Double-escaped newlines arrive as a literal "\n" and render as one long line.
         result.Code = CodeCleaner.UnescapeNewlines(result.Code);
 
-        // Some models write their deliberation into the code as comments however firmly
-        // the prompt forbids it. Strip it; note it so the behaviour stays visible.
-        var (cleaned2, removed) = CodeCleaner.Clean(result.Code);
+		// Delete the AI's extra notes from the code. Keep only the real logic.
+		var (cleaned2, removed) = CodeCleaner.Clean(result.Code);
         if (removed > 0)
         {
             result.Code = cleaned2;
@@ -492,20 +403,17 @@ public sealed class LlmTranslator : IDisposable
                 "The reasoning is in the explanation; only the logic and short labels are kept here.");
         }
 
-        // AND and OR side by side at one bracket level change meaning silently - on the
-        // Operation scenario it let auto run skip the fault check. Applies to every
-        // target: SCL binds AND tighter than OR exactly the same way.
-        foreach (var amb in CodeCleaner.FindAmbiguousPrecedence(result.Code))
+		// Warn if AND and OR are mixed without brackets. It can change the meaning of the logic.
+		foreach (var amb in CodeCleaner.FindAmbiguousPrecedence(result.Code))
             result.Warnings.Insert(0,
                 "AMBIGUOUS PRECEDENCE - AND and OR at the same bracket level, so the order of " +
                 $"evaluation is not what it looks like. Check the brackets: {amb}");
 
-        // Pseudocode is only useful if it IS pseudocode. Flag any SCL that slipped in -
-        // a manager reading "blnOut := 1;" has been handed the wrong thing.
-        if (string.Equals(pack.TargetLanguage, PromptBuilder.TargetPseudocode, StringComparison.OrdinalIgnoreCase))
+		// If the output is Pseudocode, check that no SCL code slipped in.
+		if (string.Equals(pack.TargetLanguage, PromptBuilder.TargetPseudocode, StringComparison.OrdinalIgnoreCase))
         {
-            // Comments are just labels - harmless to drop, so drop them rather than flag.
-            (result.Code, _) = CodeCleaner.StripComments(result.Code);
+			// Remove all // comments from the pseudocode.
+			(result.Code, _) = CodeCleaner.StripComments(result.Code);
 
             var leaks = CodeCleaner.FindSclSyntax(result.Code, pack.Terms.Select(t => t.Variable));
             if (leaks.Count > 0)
@@ -514,11 +422,8 @@ public sealed class LlmTranslator : IDisposable
                     ". Re-run, or try a stronger model.");
         }
 
-        // The tag check compares identifiers against PLC variables. Pseudocode and logic
-        // expressions deliberately use Property NAMES ("Trip Alarm"), so every one of
-        // them would be reported unknown. Skip it for those - they are review formats,
-        // checked by a person reading the logic, not by a compiler.
-        var unknown = PromptBuilder.UsesNames(pack.TargetLanguage)
+		// Check PLC tag names only for SCL. Pseudocode uses normal names, so skip the check.
+		var unknown = PromptBuilder.UsesNames(pack.TargetLanguage)
             ? new List<string>()
             : TagValidator.FindUnknown(result, pack).ToList();
 
@@ -538,15 +443,8 @@ public sealed class LlmTranslator : IDisposable
         };
     }
 
-    /// <summary>
-    /// Escapes raw control characters that appear INSIDE a JSON string literal.
-    ///
-    /// Smaller models routinely emit a code block with real newlines inside the "code"
-    /// value, which is invalid JSON even though the intent is obvious. Rather than fail
-    /// the whole run, walk the text tracking whether we are inside a string and escape
-    /// the offending characters. Leaves well-formed JSON untouched.
-    /// </summary>
-    private static string RepairControlChars(string s)
+	/// Fix line breaks that break the AI's JSON answer.
+	private static string RepairControlChars(string s)
     {
         var sb = new System.Text.StringBuilder(s.Length + 64);
         bool inString = false, escaped = false;
@@ -568,15 +466,8 @@ public sealed class LlmTranslator : IDisposable
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Pulls the first complete JSON object out of a reply that also contains prose.
-    ///
-    /// Models often explain their reasoning before answering, however firmly the prompt
-    /// says otherwise - Claude in particular writes a paragraph of analysis and then the
-    /// object. Scans for a balanced pair of braces, ignoring any inside string literals.
-    /// Returns null when there is nothing object-shaped to find.
-    /// </summary>
-    private static string? ExtractJsonObject(string s)
+	/// Find the JSON answer when the AI adds extra text around it.
+	private static string? ExtractJsonObject(string s)
     {
         var start = s.IndexOf('{');
         if (start < 0) return null;
@@ -596,7 +487,7 @@ public sealed class LlmTranslator : IDisposable
             if (ch == '{') depth++;
             else if (ch == '}' && --depth == 0) return s[start..(i + 1)];
         }
-        return null;   // unbalanced - truncated reply
+        return null;   
     }
 
     /// <summary>Some models wrap JSON in ```json fences despite being told not to.</summary>
@@ -609,13 +500,8 @@ public sealed class LlmTranslator : IDisposable
 
     private static string Trim(string s, int n) => s.Length <= n ? s : s[..n] + "...";
 
-    /// <summary>
-    /// How long to wait before retrying. Providers that rate-limit on a per-minute
-    /// token budget say how long the window has left - honour that, because guessing
-    /// short just burns an attempt while the window is still closed. Capped at 70s so a
-    /// stuck provider cannot hang a batch indefinitely.
-    /// </summary>
-    private static readonly Regex TryAgainIn =
+	/// How long to wait before trying again. Uses the time the provider gives, up to 70 seconds.
+	private static readonly Regex TryAgainIn =
         new(@"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*s", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static TimeSpan RetryDelay(HttpResponseMessage resp, string body, int attempt)
@@ -627,8 +513,8 @@ public sealed class LlmTranslator : IDisposable
         if (after?.Delta is { } d && d > TimeSpan.Zero)
             return d < cap ? d + TimeSpan.FromMilliseconds(500) : cap;
 
-        // Groq puts it in the message instead: "Please try again in 18.917142857s".
-        var m = TryAgainIn.Match(body);
+		// Read the wait time from Groq's message, e.g. "try again in 18.9s".
+		var m = TryAgainIn.Match(body);
         if (m.Success && double.TryParse(m.Groups[1].Value,
                 System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var secs) && secs > 0)
@@ -656,14 +542,3 @@ public sealed class LlmTranslator : IDisposable
 
     public void Dispose() => _http.Dispose();
 }
-
-
-
-
-
-
-
-
-
-
-
