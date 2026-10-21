@@ -24,12 +24,8 @@ public sealed class Scenario : System.ComponentModel.INotifyPropertyChanged
         {
             _outcome = value;
             Changed(nameof(Outcome)); Changed(nameof(Status)); Changed(nameof(StatusBrush));
-            Changed(nameof(Source));
         }
     }
-
-    /// <summary>"DB" beside the name when the result came from the database, not the AI.</summary>
-    public string Source => _outcome?.FromDatabase == true ? "DB" : "";
 
     /// <summary>Marker beside the name in the list.</summary>
     public string Status => _outcome is null ? ""

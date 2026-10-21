@@ -192,10 +192,6 @@
                                     <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
                                                FontWeight="Bold" Width="18"/>
                                     <TextBlock Text="{Binding Name}"/>
-                                    <!-- "DB" when this result was loaded from the database, not the AI -->
-                                    <TextBlock Text="{Binding Source}" Foreground="#1D7874" FontWeight="SemiBold"
-                                               FontSize="10" Margin="6,2,0,0" VerticalAlignment="Center"
-                                               ToolTip="Loaded from the database - no tokens used"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
