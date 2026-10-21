@@ -89,6 +89,9 @@
                     <ComboBox x:Name="OutputBox" Width="140" VerticalAlignment="Center" Margin="0,0,10,0"
                               SelectionChanged="OutputBox_SelectionChanged"
                               ToolTip="SCL for the PLC. Pseudocode or Logic Expression for reviewing the logic before any code is written."/>
+                    <CheckBox x:Name="IgnoreSavedBox" Content="Ignore saved" VerticalAlignment="Center"
+                              Margin="0,0,12,0"
+                              ToolTip="Send every scenario to the AI even if a saved result exists. New results are still saved."/>
                     <Button x:Name="KeyStatusBtn" Content="Key: checking..." Click="CheckKey_Click"
                             ToolTip="Reads the API key from the environment variable. Click to re-check."/>
                     <Button x:Name="TranslateBtn" Content="Request AI Translator"
@@ -189,6 +192,10 @@
                                     <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
                                                FontWeight="Bold" Width="18"/>
                                     <TextBlock Text="{Binding Name}"/>
+                                    <!-- "DB" when this result was loaded from the database, not the AI -->
+                                    <TextBlock Text="{Binding Source}" Foreground="#1D7874" FontWeight="SemiBold"
+                                               FontSize="10" Margin="6,2,0,0" VerticalAlignment="Center"
+                                               ToolTip="Loaded from the database - no tokens used"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

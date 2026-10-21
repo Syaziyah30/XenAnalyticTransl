@@ -24,8 +24,12 @@ public sealed class Scenario : System.ComponentModel.INotifyPropertyChanged
         {
             _outcome = value;
             Changed(nameof(Outcome)); Changed(nameof(Status)); Changed(nameof(StatusBrush));
+            Changed(nameof(Source));
         }
     }
+
+    /// <summary>"DB" beside the name when the result came from the database, not the AI.</summary>
+    public string Source => _outcome?.FromDatabase == true ? "DB" : "";
 
     /// <summary>Marker beside the name in the list.</summary>
     public string Status => _outcome is null ? ""
@@ -155,6 +159,13 @@ public partial class MainWindow : Window
     private readonly List<(int EquipmentId, string Name, string Text)> _allScenarios = new();
     private int _equipmentId = 1;   // 1 = Motor, 2 = Valve
     private readonly LlmTranslator _translator = new();
+
+    /// <summary>
+    /// Saved results in XenCreator.dbo.OutputXenTrans. Null when XENTRANS_DB is not set -
+    /// the app then works exactly as before, sending every scenario to the AI. Read once
+    /// at start-up, like the API keys: setx needs an app restart.
+    /// </summary>
+    private readonly ResultStore? _store = ResultStore.FromEnvironment();
     private readonly HttpClient _usageHttp = new();
 
     private CancellationTokenSource? _cts;
@@ -553,34 +564,106 @@ public partial class MainWindow : Window
         _cts = new CancellationTokenSource();
 
         var done = 0; var failed = 0; var flagged = 0;
+        var fresh = 0; var loaded = 0; var freshTokens = 0;
+        string? dbNote = null;
         var batch = System.Diagnostics.Stopwatch.StartNew();
         _batchMs = 0;           // fall back to per-scenario time until the batch lands
 
         try
         {
+            // ---- results database: check once per batch --------------------------
+            // An unreachable server should cost one timeout, not one per scenario. If
+            // anything is wrong the batch carries on without it - the database saves
+            // tokens, it is never allowed to stop a translation.
+            ResultStore? store = null;
+            if (_store is null)
+            {
+                dbNote = $"Not saving results - {ResultStore.EnvVar} is not set.";
+            }
+            else
+            {
+                Status("Checking the results database...");
+                var problem = await _store.CheckAsync(_cts.Token);
+                if (problem is null) store = _store;
+                else dbNote = problem + " Every scenario was sent to the AI.";
+            }
+            var useSaved = store is not null && IgnoreSavedBox.IsChecked != true;
+
             foreach (var s in todo)
             {
                 if (_cts.IsCancellationRequested) break;
 
                 done++;
                 ScenarioList.SelectedItem = s;          // follow along in the list
-                ResultStatus.Text = $"Generating {done} of {todo.Count}...";
-                Status($"[{done}/{todo.Count}] {s.Name} - calling {settings.Model}...");
-                StartRunClock();
 
-                TranslationOutcome outcome;
-                try
+                // The fingerprint must come from the very pack that is translated, or a
+                // saved row could be matched to a request it did not answer.
+                var pack = BuildContextPack(s);
+                var key = store is null ? null : ResultStore.ComputeKey(pack, settings);
+
+                TranslationOutcome? outcome = null;
+
+                // ---- 1. already saved? load it: no AI call, no tokens --------------
+                if (useSaved && key is not null)
                 {
-                    outcome = await _translator.TranslateAsync(BuildContextPack(s), settings, _cts.Token);
+                    try
+                    {
+                        outcome = await store!.TryLoadAsync(key, pack, _cts.Token);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        dbNote = "Database read failed - " + DbError(ex) + " Carried on without it.";
+                        store = null; useSaved = false; key = null;
+                    }
                 }
-                catch (Exception ex)
+
+                if (outcome is not null)
                 {
-                    Status($"[{done}/{todo.Count}] {s.Name} - unexpected error: {ex.Message}");
-                    break;
+                    loaded++;
+                    Status($"[{done}/{todo.Count}] {s.Name} - loaded from database");
                 }
-                finally
+                else
                 {
-                    StopRunClock();
+                    // ---- 2. not saved: ask the AI --------------------------------------
+                    ResultStatus.Text = $"Generating {done} of {todo.Count}...";
+                    Status($"[{done}/{todo.Count}] {s.Name} - calling {settings.Model}...");
+                    StartRunClock();
+                    try
+                    {
+                        outcome = await _translator.TranslateAsync(pack, settings, _cts.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        Status($"[{done}/{todo.Count}] {s.Name} - unexpected error: {ex.Message}");
+                        break;
+                    }
+                    finally
+                    {
+                        StopRunClock();
+                    }
+
+                    fresh++;
+                    freshTokens += outcome.PromptTokens + outcome.CompletionTokens;
+                    if (outcome.Ok)
+                    {
+                        _sessionRuns++;
+                        _sessionUsd += outcome.EstimateCostUsd(settings.InputUsdPerM, settings.OutputUsdPerM);
+                    }
+
+                    // ---- 3. save a good answer so the next click can reuse it ---------
+                    // Failures are never saved: a bad answer must not become the cached one.
+                    if (outcome.Ok && store is not null && key is not null)
+                    {
+                        try
+                        {
+                            await store.SaveAsync(key, pack, s.Name, outcome, _cts.Token);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            dbNote = "Could not save to the database - " + DbError(ex);
+                            store = null; useSaved = false;
+                        }
+                    }
                 }
 
                 s.Outcome = outcome;
@@ -607,8 +690,12 @@ public partial class MainWindow : Window
         }
 
         var ok = done - failed - flagged;
-        var summary = $"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  " +
+        var source = loaded == 0
+            ? $"{fresh} translated ({freshTokens:N0} tokens)"
+            : $"{fresh} translated ({freshTokens:N0} tokens), {loaded} loaded from database";
+        var summary = $"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  {source}  |  " +
                       $"{ok} clean, {flagged} with unknown identifiers, {failed} failed";
+        if (dbNote is not null) summary += $"  |  {dbNote}";
 
         // When everything failed it is almost always one cause - say what it was rather
         // than making the reader click a scenario to find out.
@@ -618,6 +705,10 @@ public partial class MainWindow : Window
         else
             Status($"{summary}  |  click a scenario to see its code.");
     }
+
+    /// <summary>A database error in one line. SqlException text never contains the password.</summary>
+    private static string DbError(Exception ex) =>
+        ex is Microsoft.Data.SqlClient.SqlException sql ? ResultStore.Describe(sql) : ex.Message;
 
     /// <summary>Shows a scenario's stored result, or clears the panel if it has none.</summary>
     private void ShowScenarioResult(Scenario s)
@@ -652,6 +743,40 @@ public partial class MainWindow : Window
     /// The context pack for one scenario. Defaults to the selected one, but the batch
     /// translator passes each in turn, so it must not read the editor.
     /// </summary>
+    /// <summary>
+    /// The scenarios a scenario refers to by name, and the ones those refer to in turn.
+    ///
+    /// Uses the editor's own tokenizer, longest match first, so a scenario counts only
+    /// where the editor colours it orange: "Trip Signal" is a property and does not
+    /// pull in the "Trip" scenario. What is orange on screen is what gets sent.
+    /// </summary>
+    private List<Scenario> ReferencedBy(Scenario start)
+    {
+        var phrases = HighlightPhrases();
+        var byName = _scenarios.GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                               .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var found = new List<Scenario>();
+        var seen = new HashSet<Scenario> { start };
+        var queue = new Queue<Scenario>();
+        queue.Enqueue(start);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var (text, kind) in ScenarioHighlighter.Tokenize(current.Text, phrases))
+            {
+                if (kind != TokenKind.Scenario) continue;
+                if (byName.TryGetValue(text.Trim(), out var referenced) && seen.Add(referenced))
+                {
+                    found.Add(referenced);
+                    queue.Enqueue(referenced);          // follow references of references
+                }
+            }
+        }
+        return found;
+    }
+
     private ContextPack BuildContextPack(Scenario? target = null)
     {
         var s = target ?? ScenarioList.SelectedItem as Scenario;
@@ -661,12 +786,15 @@ public partial class MainWindow : Window
         {
             Equipment = _equipmentId == 1 ? "Motor" : "Valve",
             Scenario = s?.Text ?? "",
-            // Every other scenario goes along, so references like "auto run ready" can be
-            // resolved and flattened instead of guessed at.
-            ReferencedScenarios = _scenarios
-                .Where(o => !ReferenceEquals(o, s) && !string.IsNullOrWhiteSpace(o.Text))
-                .Select(o => new ScenarioRef { Name = o.Name, Content = o.Text })
-                .ToList(),
+            // Only the scenarios this one actually mentions, so references like
+            // "auto run ready" can be flattened. Sending all of them made every request
+            // depend on every scenario - editing one would change all seven fingerprints
+            // and the database could never be reused.
+            ReferencedScenarios = s is null ? new List<ScenarioRef>()
+                : ReferencedBy(s)
+                    .Where(o => !string.IsNullOrWhiteSpace(o.Text))
+                    .Select(o => new ScenarioRef { Name = o.Name, Content = o.Text })
+                    .ToList(),
             Terms = terms,
             Timers = terms
                 .Where(t => string.Equals(t.Type, "TON", StringComparison.OrdinalIgnoreCase))
@@ -694,19 +822,17 @@ public partial class MainWindow : Window
             ? $"Total for the whole run. This scenario took {o.ElapsedMs / 1000.0:0.0} s."
             : "Time for this scenario.";
 
-        if (o.Ok)
-        {
-            var s = CurrentSettings();
-            _sessionRuns++;
-            _sessionUsd += o.EstimateCostUsd(s.InputUsdPerM, s.OutputUsdPerM);
-        }
+        // Session spend is counted once, when a fresh AI result arrives (Translate_Click).
+        // Counting it here added a "run" every time a result was merely displayed.
 
         var model = o.Model.Contains('/') ? o.Model[(o.Model.IndexOf('/') + 1)..] : o.Model;
         var total = o.PromptTokens + o.CompletionTokens;
         var tokens = total > 0
             ? $"  |  {o.PromptTokens:N0} in / {o.CompletionTokens:N0} out  |  total {total:N0} tokens"
             : "";
-        MetricsText.Text = $"{model}{tokens}";
+        MetricsText.Text = o.FromDatabase
+            ? $"{model}  |  loaded from database, saved {o.SavedAt:dd MMM HH:mm}  |  0 tokens used now"
+            : $"{model}{tokens}";
 
         // Slow runs are worth noticing when comparing models. A whole batch is allowed
         // longer than a single scenario before it counts as slow.
@@ -809,6 +935,7 @@ public partial class MainWindow : Window
             : sclLeak ? "Generated - CONTAINS SCL SYNTAX"
             : o.UnknownIdentifiers.Count == 0 ? "Generated successfully"
             : "Generated WITH UNKNOWN IDENTIFIERS";
+        if (o.FromDatabase) verdict = verdict.Replace("Generated", "Loaded from database");
         ResultStatus.Text = verdict;
 
         Status($"{verdict}  |  {o.Model}  |  {o.ElapsedMs} ms  |  " +
@@ -1145,7 +1272,8 @@ public partial class MainWindow : Window
 
         Status(cleared == 0
             ? "Nothing to clear. Scenario and terms are unchanged."
-            : $"Cleared {cleared} scenario result{(cleared == 1 ? "" : "s")}. Scenario and terms are unchanged.");
+            : $"Cleared {cleared} scenario result{(cleared == 1 ? "" : "s")} from the screen. " +
+              "Saved results in the database are kept - tick Ignore saved to re-translate.");
     }
 
     private void SaveRun_Click(object sender, RoutedEventArgs e)

@@ -54,11 +54,60 @@ The model is not trusted on its own. Every result is checked before it is shown:
 A failed check shows in the result header (`CHECK BRACKETS`, `CONTAINS SCL SYNTAX`) and in
 the Validation tab.
 
+## Saving results to the database
+
+Every successful translation is saved to `XenCreator.dbo.OutputXenTrans`, and a scenario
+that has not changed is loaded from there instead of being sent to the AI again. On a free
+tier this is what stretches the daily token allowance:
+
+| Click Request AI Translator | AI calls |
+|---|---|
+| First time - nothing saved yet | 7 |
+| Again, nothing changed | 0 |
+| After editing one scenario | 1 |
+
+Each request gets a SHA-256 **fingerprint** of everything that decides the answer: the
+scenario text, the scenarios it refers to, the property list, the model, the output type
+and the translation rules. A saved row is reused only on an exact match, so editing a
+scenario, changing model or editing `PromptBuilder.cs` all cause a fresh translation.
+Editing a scenario also refreshes the ones that refer to it.
+
+To support this, a request now carries only the scenarios it actually mentions - the ones
+the editor colours orange - rather than all of them. Requests are smaller as a result.
+
+Results loaded from the database show **DB** beside the scenario name. Tick **Ignore
+saved** to force a fresh translation; new results are still saved. Failed calls are never
+saved. Each save adds a row, so history is kept and the newest match wins.
+
+**Setup, once - the easy way.** Run this yourself; it asks for the database password
+(typed hidden, never shown or written to a file), tests the connection, creates the table
+if missing, and stores `XENTRANS_DB`:
+
+```
+powershell -ExecutionPolicy Bypass -File "Reference\sql\Setup-XenTransDb.ps1"
+```
+
+**Or by hand:**
+
+1. Someone with CREATE TABLE rights on XenCreator runs
+   [`Reference/sql/OutputXenTrans.sql`](Reference/sql/OutputXenTrans.sql). It is safe to
+   run twice.
+2. Store the connection string - it holds the database password, so never in the code:
+   ```
+   setx XENTRANS_DB "Server=128.100.20.33\neptune;Database=XenCreator;User Id=...;Password=...;TrustServerCertificate=True"
+   ```
+   Or `Integrated Security=True` in place of the user and password, if your Windows
+   account has access.
+3. Restart the app.
+
+Without `XENTRANS_DB` the app works exactly as before and says so in the status bar. If the
+database cannot be reached, the batch carries on without it.
+
 ## Layout
 
 | Project | What it is |
 |---|---|
-| `src/XenAnalyticTransl.AI` | Context pack, prompt, provider client, checks. Provider-neutral. **This is the deliverable** - it drops into PLC Logic Builder later |
+| `src/XenAnalyticTransl.AI` | Context pack, prompt, provider client, checks, result store. Provider-neutral. **This is the deliverable** - it drops into PLC Logic Builder later |
 | `src/XenAnalyticTransl.Studio` | WPF test rig for comparing models and outputs side by side. Disposable |
 | `src/XenAnalyticTransl.Cli` | Same pipeline, no UI. For debugging and batch runs |
 
@@ -124,8 +173,12 @@ covers roughly 40 calls, about five full runs.
   names and layout drift. Run a scenario more than once before judging a model.
 - **Assumed behaviour is flagged, not hidden.** Where a scenario does not say what happens
   otherwise - an ELSE, a reset - the model states its assumption in the warnings.
-- **Results are not saved automatically.** Use **Save Run...** or they are lost when the
-  app closes.
+- **Saved results are frozen.** Output varies between runs, so a saved answer never
+  improves by itself. Tick **Ignore saved** to get a fresh one.
+- **Scenario wording decides what is reused.** System Handle says "the Manual Operation
+  position", and the editor reads "Operation" as the Operation scenario - so editing
+  Operation also re-translates System Handle. If that is not what the wording means,
+  rephrase it.
 
 ## Documentation
 

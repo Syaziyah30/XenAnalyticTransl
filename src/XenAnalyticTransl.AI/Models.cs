@@ -93,6 +93,15 @@ public sealed class TranslationOutcome
     public string? RequestBody { get; init; }
     public string? Error { get; init; }
 
+    /// <summary>
+    /// True when this result was loaded from OutputXenTrans instead of coming from the
+    /// AI. No tokens were spent on it; the token counts are those of the original run.
+    /// </summary>
+    public bool FromDatabase { get; init; }
+
+    /// <summary>When the loaded result was first saved. Null for a fresh result.</summary>
+    public DateTime? SavedAt { get; init; }
+
     public bool Ok => Error is null && Result is not null;
 
     /// <summary>Rough cost in USD. Rates are per 1M tokens.</summary>
