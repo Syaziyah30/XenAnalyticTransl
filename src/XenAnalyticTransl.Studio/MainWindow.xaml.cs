@@ -330,20 +330,16 @@ public partial class MainWindow : Window
         var s = CurrentSettings();
         var key = s.ResolveApiKey();
 
-        // WPF treats "_" in button content as an access-key marker and hides it,
-        // so the variable name must be escaped to display correctly.
-        var shownVar = s.ApiKeyEnvVar.Replace("_", "__");
-
         if (string.IsNullOrWhiteSpace(key))
         {
-            KeyStatusBtn.Content = $"Key: MISSING ({shownVar})";
+            KeyStatusBtn.Content = "Key: MISSING";
             KeyStatusBtn.ToolTip = $"Set the environment variable {s.ApiKeyEnvVar}, then restart this app.";
             Status($"No API key. Run:  setx {s.ApiKeyEnvVar} \"your-key\"   then restart the app.");
         }
         else
         {
-            KeyStatusBtn.Content = $"Key: OK ({Mask(key)})";
-            KeyStatusBtn.ToolTip = $"Read from {s.ApiKeyEnvVar}. The key is never stored in this app or the repo.";
+            KeyStatusBtn.Content = "Key: OK";
+            KeyStatusBtn.ToolTip = $"{Mask(key)}, read from {s.ApiKeyEnvVar}. The key is never stored in this app or the repo.";
             Status("Ready.");
         }
     }
@@ -542,16 +538,26 @@ public partial class MainWindow : Window
     // ---------------------------------------------------------------- translate
 
     /// <summary>
-    /// Translates EVERY scenario of the selected equipment, one after another, and keeps
-    /// each result on its scenario. Clicking a scenario afterwards shows its own code,
-    /// so the whole profile can be reviewed without re-running anything.
+    /// Request AI Translator: sends EVERY scenario of the selected equipment to the AI, one
+    /// after another, and replaces what DB holds for each with the new result. Each result
+    /// stays on its scenario, so clicking one afterwards shows its own code.
     /// </summary>
-    private async void Translate_Click(object sender, RoutedEventArgs e)
+    private void Translate_Click(object sender, RoutedEventArgs e) => _ = RunBatchAsync(fromDb: false);
+
+    /// <summary>Load from DB: shows every scenario's saved result. No AI call, no tokens.</summary>
+    private void LoadFromDb_Click(object sender, RoutedEventArgs e) => _ = RunBatchAsync(fromDb: true);
+
+    private async Task RunBatchAsync(bool fromDb)
     {
         var todo = _scenarios.Where(s => !string.IsNullOrWhiteSpace(s.Text)).ToList();
         if (todo.Count == 0)
         {
             Status("Nothing to translate - every scenario is empty.");
+            return;
+        }
+        if (fromDb && _store is null)
+        {
+            Status($"Cannot load from DB - {ResultStore.EnvVar} is not set. Set it, then restart the app.");
             return;
         }
 
@@ -561,6 +567,7 @@ public partial class MainWindow : Window
 
         var done = 0; var failed = 0; var flagged = 0;
         var fresh = 0; var loaded = 0; var freshTokens = 0;
+        var missing = 0; var outOfDate = 0;
         string? dbNote = null;
         var batch = System.Diagnostics.Stopwatch.StartNew();
         _batchMs = 0;           // fall back to per-scenario time until the batch lands
@@ -568,9 +575,9 @@ public partial class MainWindow : Window
         try
         {
             // ---- results database: check once per batch --------------------------
-            // An unreachable server should cost one timeout, not one per scenario. If
-            // anything is wrong the batch carries on without it - the database saves
-            // tokens, it is never allowed to stop a translation.
+            // An unreachable server should cost one timeout, not one per scenario. When
+            // translating, the batch carries on without it - DB is never allowed to stop
+            // a translation. When loading, there is nothing to do without it.
             ResultStore? store = null;
             if (_store is null)
             {
@@ -581,9 +588,9 @@ public partial class MainWindow : Window
                 Status("Checking the results database...");
                 var problem = await _store.CheckAsync(_cts.Token);
                 if (problem is null) store = _store;
-                else dbNote = problem + " Every scenario was sent to the AI.";
+                else if (fromDb) { Status(problem); return; }
+                else dbNote = problem + " Results were not saved.";
             }
-            var useSaved = store is not null && IgnoreSavedBox.IsChecked != true;
 
             foreach (var s in todo)
             {
@@ -597,30 +604,35 @@ public partial class MainWindow : Window
                 var pack = BuildContextPack(s);
                 var key = store is null ? null : ResultStore.ComputeKey(pack, settings);
 
-                TranslationOutcome? outcome = null;
+                TranslationOutcome? outcome;
 
-                // ---- 1. already saved? load it: no AI call, no tokens --------------
-                if (useSaved && key is not null)
+                if (fromDb)
                 {
+                    // ---- Load from DB: the saved answer, no AI call, no tokens ---------
                     try
                     {
-                        outcome = await store!.TryLoadAsync(key, pack, _cts.Token);
+                        outcome = await store!.TryLoadAsync(key!, pack, s.Name, _cts.Token);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        dbNote = "Database read failed - " + DbError(ex) + " Carried on without it.";
-                        store = null; useSaved = false; key = null;
+                        dbNote = "DB read failed - " + DbError(ex);
+                        break;
                     }
-                }
 
-                if (outcome is not null)
-                {
+                    if (outcome is null)
+                    {
+                        // Nothing saved: leave whatever the scenario already shows.
+                        missing++;
+                        Status($"[{done}/{todo.Count}] {s.Name} - not in DB");
+                        continue;
+                    }
                     loaded++;
+                    if (outcome.OutOfDate) outOfDate++;
                     Status($"[{done}/{todo.Count}] {s.Name} - loaded from DB");
                 }
                 else
                 {
-                    // ---- 2. not saved: ask the AI --------------------------------------
+                    // ---- Request AI Translator: ask the AI -----------------------------
                     ResultStatus.Text = $"Generating {done} of {todo.Count}...";
                     Status($"[{done}/{todo.Count}] {s.Name} - calling {settings.Model}...");
                     StartRunClock();
@@ -646,8 +658,8 @@ public partial class MainWindow : Window
                         _sessionUsd += outcome.EstimateCostUsd(settings.InputUsdPerM, settings.OutputUsdPerM);
                     }
 
-                    // ---- 3. save a good answer so the next click can reuse it ---------
-                    // Failures are never saved: a bad answer must not become the cached one.
+                    // ---- save: replaces this scenario's row in DB ----------------------
+                    // Failures are never saved, so a failed call keeps the old answer.
                     if (outcome.Ok && store is not null && key is not null)
                     {
                         try
@@ -656,8 +668,8 @@ public partial class MainWindow : Window
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException)
                         {
-                            dbNote = "Could not save to the database - " + DbError(ex);
-                            store = null; useSaved = false;
+                            dbNote = "Could not save to DB - " + DbError(ex);
+                            store = null;
                         }
                     }
                 }
@@ -685,12 +697,20 @@ public partial class MainWindow : Window
             _ = RefreshUsageAsync();
         }
 
-        var ok = done - failed - flagged;
-        var source = loaded == 0
-            ? $"{fresh} translated ({freshTokens:N0} tokens)"
-            : $"{fresh} translated ({freshTokens:N0} tokens), {loaded} loaded from DB";
-        var summary = $"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  {source}  |  " +
+        string summary;
+        if (fromDb)
+        {
+            summary = $"Done: {loaded} loaded from DB in {batch.Elapsed.TotalSeconds:0.0}s, 0 tokens";
+            if (missing > 0) summary += $"  |  {missing} not in DB - click Request AI Translator";
+            if (outOfDate > 0) summary += $"  |  {outOfDate} OUT OF DATE (changed since saved)";
+        }
+        else
+        {
+            var ok = done - failed - flagged;
+            summary = $"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  " +
+                      $"{fresh} translated ({freshTokens:N0} tokens)  |  " +
                       $"{ok} clean, {flagged} with unknown identifiers, {failed} failed";
+        }
         if (dbNote is not null) summary += $"  |  {dbNote}";
 
         // When everything failed it is almost always one cause - say what it was rather
@@ -731,7 +751,18 @@ public partial class MainWindow : Window
     private void SetBusy(bool busy)
     {
         TranslateBtn.IsEnabled = !busy;
+        LoadDbBtn.IsEnabled = !busy;
         CancelBtn.IsEnabled = busy;
+        CancelBtn.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+
+        // Locked while a batch runs. Clear Result mid-run wiped the scenarios already
+        // done, so they showed no result while the rest did. Load Sample, Add/Delete and
+        // switching equipment swap the list the batch is reading its references from.
+        ClearResultBtn.IsEnabled = !busy;
+        LoadSampleBtn.IsEnabled = !busy;
+        AddScenarioBtn.IsEnabled = !busy;
+        DeleteScenarioBtn.IsEnabled = !busy;
+        ReferenceTree.IsEnabled = !busy;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : null;
     }
 
@@ -932,6 +963,7 @@ public partial class MainWindow : Window
             : o.UnknownIdentifiers.Count == 0 ? "Generated successfully"
             : "Generated WITH UNKNOWN IDENTIFIERS";
         if (o.FromDatabase) verdict = verdict.Replace("Generated", "Loaded from DB");
+        if (o.OutOfDate) verdict += " - OUT OF DATE, scenario changed since saved";
         ResultStatus.Text = verdict;
 
         Status($"{verdict}  |  {o.Model}  |  {o.ElapsedMs} ms  |  " +
@@ -1267,7 +1299,7 @@ public partial class MainWindow : Window
         Status(cleared == 0
             ? "Nothing to clear. Scenario and terms are unchanged."
             : $"Cleared {cleared} scenario result{(cleared == 1 ? "" : "s")} from the screen. " +
-              "Saved results in the database are kept - tick Ignore saved to re-translate.");
+              "Saved results in DB are kept - Load from DB brings them back.");
     }
 
     private void SaveRun_Click(object sender, RoutedEventArgs e)

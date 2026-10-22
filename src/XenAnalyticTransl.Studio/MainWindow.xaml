@@ -66,11 +66,12 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="210"/>
+                    <ColumnDefinition Width="180"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*" MinWidth="110"/>
+                    <ColumnDefinition Width="*" MinWidth="60"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
@@ -86,19 +87,26 @@
 
                 <StackPanel Grid.Column="6" Orientation="Horizontal" Margin="14,0,0,0">
                     <TextBlock Text="Output" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox x:Name="OutputBox" Width="140" VerticalAlignment="Center" Margin="0,0,10,0"
+                    <ComboBox x:Name="OutputBox" Width="125" VerticalAlignment="Center" Margin="0,0,8,0"
                               SelectionChanged="OutputBox_SelectionChanged"
                               ToolTip="SCL for the PLC. Pseudocode or Logic Expression for reviewing the logic before any code is written."/>
-                    <CheckBox x:Name="IgnoreSavedBox" Content="Ignore saved" VerticalAlignment="Center"
-                              Margin="0,0,12,0"
-                              ToolTip="Send every scenario to the AI even if a saved result exists. New results are still saved."/>
-                    <Button x:Name="KeyStatusBtn" Content="Key: checking..." Click="CheckKey_Click"
+                    <Button x:Name="KeyStatusBtn" Content="Key: ..." Click="CheckKey_Click" MinWidth="0"
                             ToolTip="Reads the API key from the environment variable. Click to re-check."/>
-                    <Button x:Name="TranslateBtn" Content="Request AI Translator"
+                </StackPanel>
+
+                <!-- The two actions, a matched pair at the right edge. Cancel shows only while
+                     a batch runs, so it takes no room the rest of the time. -->
+                <StackPanel Grid.Column="7" Orientation="Horizontal" Margin="8,0,0,0">
+                    <Button x:Name="TranslateBtn" Content="Request AI Translator" Width="155" Margin="0"
                             Background="{StaticResource Blue}" Foreground="White" FontWeight="SemiBold"
-                            MinWidth="170" Click="Translate_Click"
-                            ToolTip="Read the scenario and generate PLC logic using AI"/>
-                    <Button x:Name="CancelBtn" Content="Cancel" IsEnabled="False" Click="Cancel_Click"/>
+                            BorderBrush="{StaticResource Blue}" Click="Translate_Click"
+                            ToolTip="Send every scenario to the AI and replace what is saved in DB with the new results"/>
+                    <Button x:Name="LoadDbBtn" Content="Load from DB" Width="155" Margin="6,0,0,0"
+                            Background="White" Foreground="{StaticResource Blue}" FontWeight="SemiBold"
+                            BorderBrush="{StaticResource Blue}" Click="LoadFromDb_Click"
+                            ToolTip="Show the saved results from DB. No AI call, no tokens."/>
+                    <Button x:Name="CancelBtn" Content="Cancel" Margin="6,0,0,0" Visibility="Collapsed"
+                            IsEnabled="False" Click="Cancel_Click"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -110,7 +118,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="150"/>
                     <ColumnDefinition Width="*" MinWidth="120"/>
-                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="Auto" MinWidth="110"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
@@ -180,9 +188,9 @@
                         <TextBlock x:Name="StatementTitle" Text="Statement" Style="{StaticResource PanelTitle}"/>
                     </Border>
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6">
-                        <Button Content="Add Scenario" Click="AddScenario_Click"/>
-                        <Button Content="Delete Scenario" Click="DeleteScenario_Click"/>
-                        <Button Content="Load Sample" Click="LoadSample_Click"/>
+                        <Button x:Name="AddScenarioBtn" Content="Add Scenario" Click="AddScenario_Click"/>
+                        <Button x:Name="DeleteScenarioBtn" Content="Delete Scenario" Click="DeleteScenario_Click"/>
+                        <Button x:Name="LoadSampleBtn" Content="Load Sample" Click="LoadSample_Click"/>
                     </StackPanel>
                     <ListBox x:Name="ScenarioList" DockPanel.Dock="Left" Width="165" Margin="6,0,0,6"
                              SelectionChanged="ScenarioList_SelectionChanged">
@@ -339,7 +347,7 @@
                             <Button x:Name="CopyBtn" Content="Copy SCL" Click="CopyScl_Click"/>
                             <Button Content="Save Run..." Click="SaveRun_Click"
                                     ToolTip="Save scenario, prompt and result as a JSON file for the evaluation set"/>
-                            <Button Content="Clear Result" Click="ClearResult_Click"
+                            <Button x:Name="ClearResultBtn" Content="Clear Result" Click="ClearResult_Click"
                                     ToolTip="Empty every result tab. Does not touch the scenario or the terms."/>
                         </StackPanel>
                     </Grid>

@@ -51,33 +51,37 @@ The model is not trusted on its own. Every result is checked before it is shown:
 | Precedence guard | `AND` and `OR` at the same bracket level - `A OR B AND NOT C` silently drops the check from `A` | All |
 | Code cleaner | The model's own deliberation written into the code | All |
 
-A failed check shows in the result header (`CHECK BRACKETS`, `CONTAINS SCL SYNTAX`) and in
-the Validation tab.
+A failed check shows in the result header (`CHECK BRACKETS`, `CONTAINS SCL SYNTAX`) and as a
+warning count in the status bar.
 
 ## Saving results to the database
 
-Every successful translation is saved to `XenCreator.dbo.OutputXenTrans`, and a scenario
-that has not changed is loaded from there instead of being sent to the AI again. On a free
-tier this is what stretches the daily token allowance:
+Results are saved to `XenCreator.dbo.OutputXenTrans`. Two buttons, for R&D:
 
-| Click Request AI Translator | AI calls |
-|---|---|
-| First time - nothing saved yet | 7 |
-| Again, nothing changed | 0 |
-| After editing one scenario | 1 |
+| Button | What it does | AI calls |
+|---|---|---|
+| **Request AI Translator** | Sends every scenario to the AI and **replaces** each scenario's saved row with the new result | 7 |
+| **Load from DB** | Shows the saved results. No AI call | 0 |
 
-Each request gets a SHA-256 **fingerprint** of everything that decides the answer: the
-scenario text, the scenarios it refers to, the property list, the model, the output type
-and the translation rules. A saved row is reused only on an exact match, so editing a
-scenario, changing model or editing `PromptBuilder.cs` all cause a fresh translation.
-Editing a scenario also refreshes the ones that refer to it.
+**Measured on the Motor scenarios:** a fresh run takes two to three minutes and about 33,000
+tokens on Groq's free tier; loading the same results from DB took **0.4 seconds and 0
+tokens**.
 
-To support this, a request now carries only the scenarios it actually mentions - the ones
-the editor colours orange - rather than all of them. Requests are smaller as a result.
+The table holds **one row per scenario and output type** - equipment, scenario name and
+output (Pseudocode / Logic Expression / SCL). A new translation deletes the old row and
+inserts the new one in a single transaction, so there is no history and no duplicates.
+Running Motor never touches Valve's rows, and a pseudocode run never touches SCL rows.
+Failed calls are never saved, so a failure keeps the previous answer.
 
-Results loaded from the database show **DB** beside the scenario name. Tick **Ignore
-saved** to force a fresh translation; new results are still saved. Failed calls are never
-saved. Each save adds a row, so history is kept and the newest match wins.
+**Load from DB** matches by scenario name, so it still shows a result after the scenario
+was edited - but the result header then reads **OUT OF DATE, scenario changed since
+saved**. That is decided by a SHA-256 **fingerprint** of everything that decides the
+answer: the scenario text, the scenarios it refers to, the property list, the model, the
+output type and the translation rules. Scenarios with nothing saved are listed as "not in
+DB" in the status bar.
+
+A request carries only the scenarios it actually mentions - the ones the editor colours
+orange - rather than all of them, so requests are smaller.
 
 **Setup, once - the easy way.** Run this yourself; it asks for the database password
 (typed hidden, never shown or written to a file), tests the connection, creates the table
@@ -96,9 +100,14 @@ powershell -ExecutionPolicy Bypass -File "Reference\sql\Setup-XenTransDb.ps1"
    ```
    setx XENTRANS_DB "Server=128.100.20.33\neptune;Database=XenCreator;User Id=...;Password=...;TrustServerCertificate=True"
    ```
-   Or `Integrated Security=True` in place of the user and password, if your Windows
-   account has access.
+   `Integrated Security=True` would avoid storing a password, but Windows sign-in is
+   refused on `128.100.20.33\neptune` - use the SQL login.
 3. Restart the app.
+
+Adding the database brought in the project's first external package,
+`Microsoft.Data.SqlClient`. It pulls in a component with a known high-severity
+vulnerability, so `System.Security.Cryptography.Pkcs` is pinned to a patched version in
+`XenAnalyticTransl.AI.csproj`; NuGet reports no vulnerable packages.
 
 Without `XENTRANS_DB` the app works exactly as before and says so in the status bar. If the
 database cannot be reached, the batch carries on without it.
@@ -147,6 +156,18 @@ The Studio opens on the Lipico profile with real data loaded - 7 Motor and 2 Val
 scenarios across 16 properties. Choose an **Output**, then press **Request AI Translator**
 to translate every scenario of the selected equipment.
 
+Using the Studio:
+
+- **General References** holds Lipico > Equipment Type > Motor, Valve. Pick one to list its
+  scenarios; the Statement title says which is showing ("Statement - Motor").
+- **Results stay on screen** while the app is open. Click between scenarios, or switch
+  Motor to Valve and back, and each scenario keeps its output; switching back reopens the
+  scenario that was open. **Load Sample** starts fresh on purpose.
+- The result panel shows **Generated Pseudocode** only. The Explanation, Validation,
+  Context Pack, Request Sent and Raw Response tabs are hidden, not removed - delete
+  `Visibility="Collapsed"` on a tab in `MainWindow.xaml` to bring it back.
+- **Ctrl+F** searches scenario names and text, the properties and the result.
+
 From the command line:
 
 ```
@@ -173,8 +194,12 @@ covers roughly 40 calls, about five full runs.
   names and layout drift. Run a scenario more than once before judging a model.
 - **Assumed behaviour is flagged, not hidden.** Where a scenario does not say what happens
   otherwise - an ELSE, a reset - the model states its assumption in the warnings.
-- **Saved results are frozen.** Output varies between runs, so a saved answer never
-  improves by itself. Tick **Ignore saved** to get a fresh one.
+- **No history in DB.** Request AI Translator overwrites the previous answer for every
+  scenario it runs, even if the old one was better. Copy anything worth keeping first.
+- **The screen starts empty after a restart.** Results are kept while the app is open;
+  after reopening it, Load from DB brings them back in under a second.
+- **The explanation and warning text are hidden** with the other result tabs. Serious
+  problems still show in the result header; the rest only as a count in the status bar.
 - **Scenario wording decides what is reused.** System Handle says "the Manual Operation
   position", and the editor reads "Operation" as the Operation scenario - so editing
   Operation also re-translates System Handle. If that is not what the wording means,
@@ -185,6 +210,10 @@ covers roughly 40 calls, about five full runs.
 | File | Covers |
 |---|---|
 | [Reference/00-START-HERE.md](Reference/00-START-HERE.md) | Setup, running it, troubleshooting |
+| [Reference/Save AI Results to Database - Built and Tested.pptx](Reference/Save%20AI%20Results%20to%20Database%20-%20Built%20and%20Tested.pptx) (and [PDF](Reference/Save%20AI%20Results%20to%20Database%20-%20Built%20and%20Tested.pdf)) | The database feature as built: how it works, measured result, test results, what is next |
+| [Reference/Proposal - Save AI Results to Database.pptx](Reference/Proposal%20-%20Save%20AI%20Results%20to%20Database.pptx) (and [PDF](Reference/Proposal%20-%20Save%20AI%20Results%20to%20Database.pdf)) | The original proposal, before it was built |
+| [Reference/sql/OutputXenTrans.sql](Reference/sql/OutputXenTrans.sql) | The table script |
+| [Reference/sql/Setup-XenTransDb.ps1](Reference/sql/Setup-XenTransDb.ps1) | One-time setup: creates the table if missing and stores `XENTRANS_DB` |
 | [Reference/execution-plan.md](Reference/execution-plan.md) | Project plan and milestones |
 | [docs/master-plan.md](docs/master-plan.md) | Wider programme plan |
 | [docs/gemini-integration-flow.md](docs/gemini-integration-flow.md) | Integration flowchart |

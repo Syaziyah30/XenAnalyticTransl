@@ -102,6 +102,13 @@ public sealed class TranslationOutcome
     /// <summary>When the loaded result was first saved. Null for a fresh result.</summary>
     public DateTime? SavedAt { get; init; }
 
+    /// <summary>
+    /// A loaded result whose request differs from what would be sent now - the scenario,
+    /// a scenario it refers to, the properties, the model or the rules changed since it
+    /// was saved. Shown, but flagged: Request AI Translator brings it up to date.
+    /// </summary>
+    public bool OutOfDate { get; init; }
+
     public bool Ok => Error is null && Result is not null;
 
     /// <summary>Rough cost in USD. Rates are per 1M tokens.</summary>

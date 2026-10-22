@@ -7,9 +7,10 @@ using Microsoft.Data.SqlClient;
 namespace XenAnalyticTransl.AI;
 
 /// <summary>
-/// Saves AI translations in SQL Server and loads them back, so a scenario that has not
-/// changed is not sent to the AI again. On a free tier the daily token allowance is the
-/// limit on how much can be tested; reusing results stretches it.
+/// Saves AI translations in SQL Server and loads them back without calling the AI. On a
+/// free tier the daily token allowance is the limit on how much can be tested; loading
+/// saved results stretches it. One row per scenario and output type: a new translation
+/// replaces the old one.
 ///
 /// Table: dbo.OutputXenTrans in the XenCreator database (Reference/sql/OutputXenTrans.sql).
 ///
@@ -96,10 +97,13 @@ public sealed class ResultStore
     // ------------------------------------------------------------------ load
 
     /// <summary>
-    /// The newest saved result for this fingerprint, or null if there is none. SCL results
-    /// are re-checked against the current tag table, so the ✓ / ! marker stays honest.
+    /// The saved result for this scenario - same equipment, name and output type - or null
+    /// if there is none. Matched by name, not fingerprint, so a result is shown even after
+    /// the scenario changed; <paramref name="currentKey"/> marks it OutOfDate when it did.
+    /// SCL results are re-checked against the current tag table, so the ✓ / ! marker stays honest.
     /// </summary>
-    public async Task<TranslationOutcome?> TryLoadAsync(string key, ContextPack pack, CancellationToken ct = default)
+    public async Task<TranslationOutcome?> TryLoadAsync(string currentKey, ContextPack pack, string scenarioName,
+                                                        CancellationToken ct = default)
     {
         await using var cn = new SqlConnection(_connectionString);
         await cn.OpenAsync(ct).ConfigureAwait(false);
@@ -107,12 +111,12 @@ public sealed class ResultStore
         await using var cmd = new SqlCommand(
             $"""
             SELECT TOP (1) Provider, Model, Code, Explanation, VariablesUsed, Warnings,
-                           PromptTokens, CompletionTokens, ElapsedMs, CreatedAt
+                           PromptTokens, CompletionTokens, ElapsedMs, CreatedAt, CacheKey
             FROM {Table}
-            WHERE CacheKey = @key
+            WHERE Equipment = @equipment AND ScenarioName = @name AND OutputTarget = @target
             ORDER BY CreatedAt DESC, Id DESC
             """, cn);
-        cmd.Parameters.Add("@key", SqlDbType.Char, 64).Value = key;
+        AddScenarioParams(cmd, pack, scenarioName);
 
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await r.ReadAsync(ct).ConfigureAwait(false)) return null;
@@ -141,15 +145,17 @@ public sealed class ResultStore
             ElapsedMs = r.IsDBNull(8) ? 0 : r.GetInt32(8),
             FromDatabase = true,
             SavedAt = DateTime.SpecifyKind(r.GetDateTime(9), DateTimeKind.Utc).ToLocalTime(),
+            OutOfDate = !string.Equals(r.GetString(10).Trim(), currentKey, StringComparison.OrdinalIgnoreCase),
         };
     }
 
     // ------------------------------------------------------------------ save
 
     /// <summary>
-    /// Saves a fresh, successful result. Failures and results that were themselves loaded
-    /// from the database are never saved - a bad answer must not become the cached one.
-    /// Each save is a new row; history is kept and the newest row wins on load.
+    /// Saves a fresh, successful result, REPLACING whatever was saved for this scenario -
+    /// same equipment, name and output type. One row per scenario, always the latest; no
+    /// history. Delete and insert run in one transaction, so a failed save leaves the old
+    /// row in place. Failures and loaded results are never saved.
     /// </summary>
     public async Task SaveAsync(string key, ContextPack pack, string scenarioName,
                                 TranslationOutcome outcome, CancellationToken ct = default)
@@ -159,6 +165,15 @@ public sealed class ResultStore
 
         await using var cn = new SqlConnection(_connectionString);
         await cn.OpenAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqlTransaction)await cn.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        await using (var del = new SqlCommand(
+            $"DELETE FROM {Table} WHERE Equipment = @equipment AND ScenarioName = @name AND OutputTarget = @target",
+            cn, tx))
+        {
+            AddScenarioParams(del, pack, scenarioName);
+            await del.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
 
         await using var cmd = new SqlCommand(
             $"""
@@ -168,14 +183,12 @@ public sealed class ResultStore
             VALUES
                 (@key, @equipment, @name, @text, @target, @provider, @model,
                  @code, @explanation, @vars, @warnings, @pt, @ct, @ms)
-            """, cn);
+            """, cn, tx);
 
+        AddScenarioParams(cmd, pack, scenarioName);
         var p = cmd.Parameters;
         p.Add("@key", SqlDbType.Char, 64).Value = key;
-        p.Add("@equipment", SqlDbType.NVarChar, 50).Value = Clip(pack.Equipment, 50);
-        p.Add("@name", SqlDbType.NVarChar, 200).Value = Clip(scenarioName, 200);
         p.Add("@text", SqlDbType.NVarChar, -1).Value = pack.Scenario;
-        p.Add("@target", SqlDbType.NVarChar, 30).Value = Clip(pack.TargetLanguage, 30);
         p.Add("@provider", SqlDbType.NVarChar, 100).Value = Clip(outcome.Provider, 100);
         p.Add("@model", SqlDbType.NVarChar, 100).Value = Clip(outcome.Model, 100);
         p.Add("@code", SqlDbType.NVarChar, -1).Value = r.Code ?? "";
@@ -187,9 +200,19 @@ public sealed class ResultStore
         p.Add("@ms", SqlDbType.Int).Value = (int)Math.Min(int.MaxValue, outcome.ElapsedMs);
 
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /// <summary>The three columns that identify a scenario's row.</summary>
+    private static void AddScenarioParams(SqlCommand cmd, ContextPack pack, string scenarioName)
+    {
+        var p = cmd.Parameters;
+        p.Add("@equipment", SqlDbType.NVarChar, 50).Value = Clip(pack.Equipment, 50);
+        p.Add("@name", SqlDbType.NVarChar, 200).Value = Clip(scenarioName, 200);
+        p.Add("@target", SqlDbType.NVarChar, 30).Value = Clip(pack.TargetLanguage, 30);
+    }
 
     private static List<string> FromJson(string? json)
     {

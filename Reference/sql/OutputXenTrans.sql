@@ -1,8 +1,9 @@
 -- ============================================================================
 -- XenCreator.dbo.OutputXenTrans
 --
--- Saved AI translations, so a scenario that has not changed is loaded instead of
--- being sent to the AI again. One row per successful translation; history is kept.
+-- Saved AI translations, loaded by the Studio's Load from DB button without calling
+-- the AI. One row per Equipment + ScenarioName + OutputTarget: the app replaces the
+-- row on every new translation, so no history is kept.
 --
 -- Run once on 128.100.20.33\neptune by someone with CREATE TABLE rights on
 -- XenCreator. Safe to run twice: it does nothing if the table already exists.
