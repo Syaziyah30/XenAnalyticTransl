@@ -177,7 +177,7 @@
             <Border Grid.Column="2" Style="{StaticResource Card}">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
-                        <TextBlock Text="Statement" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock x:Name="StatementTitle" Text="Statement" Style="{StaticResource PanelTitle}"/>
                     </Border>
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6">
                         <Button Content="Add Scenario" Click="AddScenario_Click"/>
@@ -228,7 +228,7 @@
             <Border Grid.Column="4" Style="{StaticResource Card}">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
-                        <TextBlock Text="Properties" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock x:Name="PropertiesTitle" Text="Properties" Style="{StaticResource PanelTitle}"/>
                     </Border>
 
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6">

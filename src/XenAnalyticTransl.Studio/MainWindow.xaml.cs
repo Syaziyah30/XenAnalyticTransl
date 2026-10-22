@@ -616,7 +616,7 @@ public partial class MainWindow : Window
                 if (outcome is not null)
                 {
                     loaded++;
-                    Status($"[{done}/{todo.Count}] {s.Name} - loaded from database");
+                    Status($"[{done}/{todo.Count}] {s.Name} - loaded from DB");
                 }
                 else
                 {
@@ -688,7 +688,7 @@ public partial class MainWindow : Window
         var ok = done - failed - flagged;
         var source = loaded == 0
             ? $"{fresh} translated ({freshTokens:N0} tokens)"
-            : $"{fresh} translated ({freshTokens:N0} tokens), {loaded} loaded from database";
+            : $"{fresh} translated ({freshTokens:N0} tokens), {loaded} loaded from DB";
         var summary = $"Done: {done} scenario(s) in {batch.Elapsed.TotalSeconds:0.0}s  |  {source}  |  " +
                       $"{ok} clean, {flagged} with unknown identifiers, {failed} failed";
         if (dbNote is not null) summary += $"  |  {dbNote}";
@@ -827,7 +827,7 @@ public partial class MainWindow : Window
             ? $"  |  {o.PromptTokens:N0} in / {o.CompletionTokens:N0} out  |  total {total:N0} tokens"
             : "";
         MetricsText.Text = o.FromDatabase
-            ? $"{model}  |  loaded from database, saved {o.SavedAt:dd MMM HH:mm}  |  0 tokens used now"
+            ? $"{model}  |  loaded from DB, saved {o.SavedAt:dd MMM HH:mm}  |  0 tokens used now"
             : $"{model}{tokens}";
 
         // Slow runs are worth noticing when comparing models. A whole batch is allowed
@@ -931,7 +931,7 @@ public partial class MainWindow : Window
             : sclLeak ? "Generated - CONTAINS SCL SYNTAX"
             : o.UnknownIdentifiers.Count == 0 ? "Generated successfully"
             : "Generated WITH UNKNOWN IDENTIFIERS";
-        if (o.FromDatabase) verdict = verdict.Replace("Generated", "Loaded from database");
+        if (o.FromDatabase) verdict = verdict.Replace("Generated", "Loaded from DB");
         ResultStatus.Text = verdict;
 
         Status($"{verdict}  |  {o.Model}  |  {o.ElapsedMs} ms  |  " +
@@ -1083,9 +1083,10 @@ public partial class MainWindow : Window
         foreach (var s in _scenarios)
         {
             var scenario = s;
+            void Select() => ScenarioList.SelectedItem = scenario;
+
             if (Has(scenario.Name))
-                _hits.Add(new Hit($"Scenario: {scenario.Name}",
-                    () => ScenarioList.SelectedItem = scenario));
+                _hits.Add(new Hit($"Scenario: {scenario.Name}", Select));
 
             // One hit per occurrence, so stepping walks the text rather than the list.
             var t = scenario.Text;
@@ -1096,10 +1097,7 @@ public partial class MainWindow : Window
                 nth++;
                 var label = $"Scenario text: {scenario.Name}" + (nth > 1 ? $" ({nth})" : "");
                 var hitStart = k;
-                _hits.Add(new Hit(label, () =>
-                {
-                    ScenarioList.SelectedItem = scenario;
-                }, null, hitStart, scenario));
+                _hits.Add(new Hit(label, Select, null, hitStart, scenario));
                 k = t.IndexOf(term, k + 1, StringComparison.OrdinalIgnoreCase);
             }
         }
@@ -1330,15 +1328,43 @@ public partial class MainWindow : Window
         equip.Items.Add(valve);
         profile.Items.Add(equip);
 
-        var fn = new TreeViewItem { Header = "Function", IsExpanded = true };
-        fn.Items.Add(new TreeViewItem { Header = "HMI" });
-        fn.Items.Add(new TreeViewItem { Header = "PLC" });
-        fn.Items.Add(new TreeViewItem { Header = "Delay Timer" });
-        fn.Items.Add(new TreeViewItem { Header = "Time Recorder" });
-
         ReferenceTree.Items.Add(profile);
-        ReferenceTree.Items.Add(fn);
-        ReferenceTree.Items.Add(new TreeViewItem { Header = "Tags" });
+    }
+
+    private string EquipmentName => _equipmentId == 1 ? "Motor" : "Valve";
+
+    /// <summary>Shows which equipment's scenarios are listed: "Statement - Motor".</summary>
+    private void UpdateStatementTitle()
+    {
+        if (StatementTitle is null) return;
+        StatementTitle.Text = $"Statement  -  {EquipmentName}";
+    }
+
+    /// <summary>
+    /// Selects the first scenario so the editor and result follow the list, or empties
+    /// them when the list is empty - a list with no selection would otherwise leave the
+    /// last scenario's text and code on screen.
+    /// </summary>
+    private void ShowFirstScenario()
+    {
+        if (ScenarioList.Items.Count > 0)
+        {
+            ScenarioList.SelectedIndex = 0;
+            if (ScenarioList.SelectedItem is Scenario s)      // fires no event if already selected
+            {
+                ScenarioPlainText = s.Text;
+                ShowScenarioResult(s);
+            }
+            return;
+        }
+
+        ScenarioList.SelectedIndex = -1;
+        ScenarioPlainText = "";
+        SclBox.Text = ExplanationBox.Text = RawBox.Text = RequestBox.Text = ContextBox.Text = "";
+        UnknownBox.Text = WarningsBox.Text = "-";
+        ResultStatus.Text = "No scenarios";
+        MetricsPanel.Visibility = Visibility.Collapsed;
+        _lastOutcome = null;
     }
 
     /// <summary>Picking equipment in the tree shows only that equipment's scenarios.</summary>
@@ -1347,21 +1373,55 @@ public partial class MainWindow : Window
         if (sender is not TreeViewItem { Tag: int id }) return;
         e.Handled = true;
         if (_equipmentId == id) return;
+
+        // Keep the equipment being left exactly as it is - results, edits, added or
+        // deleted scenarios, and which one was selected - so coming back finds it intact.
+        _scenarioCache[_equipmentId] = _scenarios.ToList();
+        _lastSelected[_equipmentId] = ScenarioList.SelectedItem as Scenario;
+
         _equipmentId = id;
         ShowScenariosForEquipment();
     }
 
+    /// <summary>
+    /// Each equipment's scenarios, kept while another equipment is on screen. They used to
+    /// be rebuilt from the sample data on every switch, which threw away every result and
+    /// every edit - switching Motor to Valve and back left nothing to show.
+    /// </summary>
+    private readonly Dictionary<int, List<Scenario>> _scenarioCache = new();
+    private readonly Dictionary<int, Scenario?> _lastSelected = new();
+
     private void ShowScenariosForEquipment()
     {
+        if (!_scenarioCache.TryGetValue(_equipmentId, out var list))
+        {
+            list = _allScenarios.Where(s => s.EquipmentId == _equipmentId)
+                                .Select(s => new Scenario { Name = s.Name, Text = s.Text })
+                                .ToList();
+            _scenarioCache[_equipmentId] = list;
+        }
+
         _scenarios.Clear();
-        foreach (var s in _allScenarios.Where(s => s.EquipmentId == _equipmentId))
-            _scenarios.Add(new Scenario { Name = s.Name, Text = s.Text });
+        foreach (var s in list) _scenarios.Add(s);
 
-        if (_scenarios.Count > 0) ScenarioList.SelectedIndex = 0;
-        else { ScenarioPlainText = ""; }
+        UpdateStatementTitle();
 
-        var eq = _equipmentId == 1 ? "Motor" : "Valve";
-        Status($"{eq}: {_scenarios.Count} scenario{(_scenarios.Count == 1 ? "" : "s")} loaded.");
+        // Back to the scenario that was open when this equipment was last shown.
+        if (_lastSelected.TryGetValue(_equipmentId, out var previous) &&
+            previous is not null && _scenarios.Contains(previous))
+        {
+            ScenarioList.SelectedItem = previous;
+            ScenarioPlainText = previous.Text;
+            ShowScenarioResult(previous);
+        }
+        else
+        {
+            ShowFirstScenario();
+        }
+
+        var withResult = _scenarios.Count(s => s.Outcome is not null);
+        Status($"{EquipmentName}: {_scenarios.Count} scenario{(_scenarios.Count == 1 ? "" : "s")}" +
+               (withResult > 0 ? $", {withResult} with results kept from earlier." : " loaded."));
     }
 
     /// <summary>
@@ -1376,6 +1436,9 @@ public partial class MainWindow : Window
     {
         // ---- Statement table -------------------------------------------------
         _allScenarios.Clear();
+        // Load Sample means start again from the sample data - forget kept scenarios.
+        _scenarioCache.Clear();
+        _lastSelected.Clear();
         void S(int equipmentId, string name, string text) =>
             _allScenarios.Add((equipmentId, name, text));
 
